@@ -75,23 +75,6 @@ function mergeRowsWithMemory(rows: ChannelRow[]) {
   return merged.sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-function addToMemory(slugs: string[]): AddResult {
-  const added: string[] = [];
-  const duplicates: string[] = [];
-
-  for (const slug of unique(slugs)) {
-    if (memoryChannels.has(slug)) {
-      duplicates.push(slug);
-      continue;
-    }
-
-    memoryChannels.set(slug, nowIso());
-    added.push(slug);
-  }
-
-  return { added, duplicates };
-}
-
 function offlineRow(row: ChannelRow) {
   return {
     ...fallbackKickChannel(row.slug),
@@ -129,17 +112,20 @@ async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
   if (!cleanSlugs.length) return { added: [], duplicates: [] };
 
   const existing = await findExistingChannels(cleanSlugs);
-  const memoryDuplicates = cleanSlugs.filter((slug) => memoryChannels.has(slug));
-  const duplicates = cleanSlugs.filter((slug) => existing.has(slug) || memoryChannels.has(slug));
-  const toAdd = cleanSlugs.filter((slug) => !existing.has(slug) && !memoryChannels.has(slug));
+  const duplicates = cleanSlugs.filter((slug) => existing.has(slug));
+  const toAdd = cleanSlugs.filter((slug) => !existing.has(slug));
 
-  if (!toAdd.length) return { added: [], duplicates: unique([...duplicates, ...memoryDuplicates]) };
+  if (!toAdd.length) return { added: [], duplicates };
 
   const supabase = getSupabaseAdmin();
   const simpleRows = toAdd.map((slug) => ({ slug }));
   const first = await supabase.from("channels").insert(simpleRows);
 
-  if (!first.error) return { added: toAdd, duplicates };
+  if (!first.error) {
+    for (const slug of toAdd) memoryChannels.delete(slug);
+    return { added: toAdd, duplicates };
+  }
+
   if (isDuplicateError(first.error)) return { added: [], duplicates: cleanSlugs };
 
   if (!isLegacyUserIdError(first.error)) throw first.error;
@@ -147,7 +133,11 @@ async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
   const legacyRows = toAdd.map((slug) => ({ slug, user_id: 0 }));
   const second = await supabase.from("channels").insert(legacyRows);
 
-  if (!second.error) return { added: toAdd, duplicates };
+  if (!second.error) {
+    for (const slug of toAdd) memoryChannels.delete(slug);
+    return { added: toAdd, duplicates };
+  }
+
   if (isDuplicateError(second.error)) return { added: [], duplicates: cleanSlugs };
 
   throw second.error;
@@ -276,21 +266,16 @@ export async function POST(req: NextRequest) {
         : "Todos esos canales ya estaban agregados."
     });
   } catch (error) {
-    const result = addToMemory(slugs);
-    const rows = result.added.map((slug) => ({ slug, created_at: nowIso() }));
-    const { channels } = await hydrateRows(rows);
-
-    return NextResponse.json({
-      ok: true,
-      storage: "fallback",
-      permanent: false,
-      warning: "Supabase bloqueó la escritura. Los canales se muestran sin romper la página.",
-      supabase_error: getErrorMessage(error),
-      ...result,
-      channels,
-      message: result.added.length
-        ? `Se añadieron ${result.added.length} canal(es).${result.duplicates.length ? ` ${result.duplicates.length} ya existían.` : ""}`
-        : "Todos esos canales ya estaban agregados."
-    });
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "storage_not_persistent",
+        storage: "supabase",
+        permanent: false,
+        error: "El canal no se guardó porque Supabase bloqueó la escritura. Revisa SUPABASE_SERVICE_ROLE_KEY en Vercel y la tabla public.channels.",
+        supabase_error: getErrorMessage(error)
+      },
+      { status: 500 }
+    );
   }
 }
