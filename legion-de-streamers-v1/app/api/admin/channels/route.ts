@@ -344,7 +344,7 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const removed = await deleteSlug(slug);
-    const channels = await readAdminRows();
+    const channels = (await readAdminRows()).filter((channel) => channel.slug.toLowerCase() !== slug.toLowerCase());
 
     return NextResponse.json({
       ok: true,
