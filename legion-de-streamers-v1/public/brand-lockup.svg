@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 180" role="img" aria-label="Legión de Streamers">
+  <defs>
+    <linearGradient id="gold" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#fff3a6"/>
+      <stop offset="0.28" stop-color="#ffc93a"/>
+      <stop offset="0.62" stop-color="#d77900"/>
+      <stop offset="1" stop-color="#681d00"/>
+    </linearGradient>
+    <linearGradient id="silver" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.34" stop-color="#e9e3de"/>
+      <stop offset="0.72" stop-color="#9a8f8d"/>
+      <stop offset="1" stop-color="#493b39"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#ff5b18"/>
+      <stop offset="0.5" stop-color="#b80e15"/>
+      <stop offset="1" stop-color="#2b0505"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-30%" width="150%" height="170%">
+      <feDropShadow dx="0" dy="5" stdDeviation="2" flood-color="#130000" flood-opacity="0.9"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#ff3b00" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <path d="M84 9 142 31 155 88 121 151 84 168 47 151 13 88 26 31Z" fill="#150907" stroke="#f4a326" stroke-width="6"/>
+    <path d="M42 42 84 19 126 42 111 71 138 77 108 91 120 130 84 154 48 130 60 91 30 77 57 71Z" fill="url(#red)" stroke="#2a0500" stroke-width="5"/>
+    <path d="M52 63h18v57h29v17H52Z" fill="url(#gold)" stroke="#310800" stroke-width="2"/>
+    <path d="M92 55c23 0 38 11 38 29h-22c0-7-6-11-16-11-9 0-14 3-14 8 0 16 55 2 55 34 0 20-18 32-42 32-26 0-43-13-43-34h23c0 9 8 15 21 15 10 0 17-3 17-9 0-17-55-3-55-35 0-18 16-29 38-29Z" fill="url(#gold)" stroke="#310800" stroke-width="2"/>
+    <path d="M83 4 96 34 84 26 72 34Z" fill="#ffd65f"/>
+  </g>
+
+  <g filter="url(#shadow)" font-family="Impact, Haettenschweiler, 'Arial Black', sans-serif" font-weight="900" paint-order="stroke fill">
+    <text x="185" y="85" font-size="70" letter-spacing="1" fill="url(#gold)" stroke="#2b0700" stroke-width="6">LEGIÓN</text>
+    <text x="188" y="138" font-size="45" letter-spacing="2" fill="url(#silver)" stroke="#1b0b0b" stroke-width="5">DE STREAMERS</text>
+    <path d="M187 151h500l-16 15H203Z" fill="#b71914" opacity="0.75"/>
+  </g>
+</svg>
