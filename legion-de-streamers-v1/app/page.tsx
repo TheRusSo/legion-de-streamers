@@ -6,6 +6,7 @@ const MAIN_KICK_URL = "https://kick.com/soyelmoro";
 const DISCORD_URL = "https://discord.com/invite/dSuxTZGD5u";
 const MAIN_CHANNEL = "soyelmoro";
 const LOCAL_CHANNELS_KEY = "legion_streamers_local_channels";
+const LOCAL_DELETED_CHANNELS_KEY = "legion_streamers_deleted_channels";
 
 type Channel = {
   slug: string;
@@ -65,30 +66,51 @@ function extractLocalSlugs(input: string) {
   return [...slugs];
 }
 
-function getStoredLocalSlugs() {
+function getStoredList(key: string) {
   if (typeof window === "undefined") return [] as string[];
 
   try {
-    return extractLocalSlugs(window.localStorage.getItem(LOCAL_CHANNELS_KEY) || "");
+    return extractLocalSlugs(window.localStorage.getItem(key) || "");
   } catch {
     return [] as string[];
   }
 }
 
-function saveStoredLocalSlugs(slugs: string[]) {
+function saveStoredList(key: string, slugs: string[]) {
   if (typeof window === "undefined") return;
 
   try {
     const clean = [...new Set(slugs.map(cleanLocalSlug).filter(Boolean))];
-    window.localStorage.setItem(LOCAL_CHANNELS_KEY, clean.join("\n"));
+    window.localStorage.setItem(key, clean.join("\n"));
   } catch {
     // localStorage may be blocked by the browser; ignore silently.
   }
 }
 
+function getStoredLocalSlugs() {
+  return getStoredList(LOCAL_CHANNELS_KEY);
+}
+
+function getStoredDeletedSlugs() {
+  return getStoredList(LOCAL_DELETED_CHANNELS_KEY);
+}
+
+function saveStoredLocalSlugs(slugs: string[]) {
+  saveStoredList(LOCAL_CHANNELS_KEY, slugs);
+}
+
+function saveStoredDeletedSlugs(slugs: string[]) {
+  saveStoredList(LOCAL_DELETED_CHANNELS_KEY, slugs);
+}
+
 function addStoredLocalSlugs(slugs: string[]) {
+  const cleanSlugs = slugs.map(cleanLocalSlug).filter(Boolean);
   const current = getStoredLocalSlugs();
-  saveStoredLocalSlugs([...current, ...slugs]);
+  const deleted = getStoredDeletedSlugs();
+  const added = new Set(cleanSlugs);
+
+  saveStoredDeletedSlugs(deleted.filter((slug) => !added.has(slug)));
+  saveStoredLocalSlugs([...current, ...cleanSlugs]);
 }
 
 function initials(value: string) {
@@ -138,7 +160,8 @@ export default function Page() {
 
   async function loadChannels() {
     try {
-      const localSlugs = getStoredLocalSlugs();
+      const deletedSet = new Set(getStoredDeletedSlugs());
+      const localSlugs = getStoredLocalSlugs().filter((slug) => !deletedSet.has(slug));
       const extra = localSlugs.length ? `?extra=${encodeURIComponent(localSlugs.join("\n"))}` : "";
       const res = await fetch(`/api/channels${extra}`, { cache: "no-store" });
       const data = await readApiResult(res);
@@ -147,7 +170,8 @@ export default function Page() {
         throw new Error(data.error || "No se pudo cargar el directorio.");
       }
 
-      setChannels(data.channels || []);
+      const visibleChannels = (data.channels || []).filter((channel) => !deletedSet.has(channel.slug.toLowerCase()));
+      setChannels(visibleChannels);
       setSystemNotice(data.warning || "Perfiles y estado EN VIVO se actualizan automáticamente cada 30 segundos.");
     } catch (error) {
       const text = error instanceof Error ? error.message : "Error desconocido.";
@@ -160,7 +184,20 @@ export default function Page() {
   useEffect(() => {
     loadChannels();
     const timer = setInterval(loadChannels, 30_000);
-    return () => clearInterval(timer);
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === LOCAL_CHANNELS_KEY || event.key === LOCAL_DELETED_CHANNELS_KEY) {
+        loadChannels();
+      }
+    };
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", loadChannels);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", loadChannels);
+    };
   }, []);
 
   async function addChannel(e: FormEvent) {
