@@ -98,6 +98,17 @@ export default function AdminPage() {
     }
   }
 
+  function removeChannelFromPanel(slug: string) {
+    const normalized = normalizeAdminInput(slug).toLowerCase();
+    setChannels((current) => current.filter((channel) => channel.slug.toLowerCase() !== normalized));
+    setEdits((current) => {
+      const next = { ...current };
+      delete next[slug];
+      delete next[normalized];
+      return next;
+    });
+  }
+
   async function request(path: string, options: RequestInit = {}) {
     const res = await fetch(path, {
       ...options,
@@ -232,12 +243,13 @@ export default function AdminPage() {
     setError("");
 
     try {
-      const data = await request(`/api/admin/channels?slug=${encodeURIComponent(slug)}`, {
+      await request(`/api/admin/channels?slug=${encodeURIComponent(slug)}`, {
         method: "DELETE"
       });
 
+      // Fuerza la salida visual inmediata del panel aunque Supabase tarde unos segundos en reflejar la lectura.
+      removeChannelFromPanel(slug);
       setNotice(`Eliminado: @${slug}. Ya no aparecerá en la página pública.`);
-      if (!data.channels) await loadChannels();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error desconocido.");
     } finally {
@@ -289,8 +301,8 @@ export default function AdminPage() {
 
           <div className={styles.actions}>
             <a className={styles.ghostButton} href="/" target="_blank" rel="noreferrer">VER PÁGINA</a>
-            <button className={styles.ghostButton} onClick={() => loadChannels()} disabled={loading}>ACTUALIZAR</button>
-            <button className={styles.dangerButton} onClick={logout}>SALIR</button>
+            <button type="button" className={styles.ghostButton} onClick={() => loadChannels()} disabled={loading}>ACTUALIZAR</button>
+            <button type="button" className={styles.dangerButton} onClick={logout}>SALIR</button>
           </div>
         </div>
 
@@ -342,6 +354,7 @@ export default function AdminPage() {
                       <td>
                         <div className={styles.actions}>
                           <button
+                            type="button"
                             className={styles.ghostButton}
                             onClick={() => updateChannel(channel.slug)}
                             disabled={busySlug === channel.slug || !(edits[channel.slug] || "").trim()}
@@ -349,6 +362,7 @@ export default function AdminPage() {
                             GUARDAR
                           </button>
                           <button
+                            type="button"
                             className={styles.dangerButton}
                             onClick={() => deleteChannel(channel.slug)}
                             disabled={busySlug === channel.slug}
