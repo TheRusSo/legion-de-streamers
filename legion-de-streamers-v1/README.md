@@ -1,34 +1,45 @@
-# Legión de Streamers — V1
+# Legión de Streamers — versión online
 
-Directorio automático de miembros de KICK.
+Esta versión convierte la web en un directorio compartido para la comunidad:
 
-## Incluye
-- Añadir canal mediante URL o usuario.
-- Validación con KICK.
-- LIVE/OFFLINE automático.
-- Avatar, título, categoría y viewers.
-- Botón al perfil oficial.
-- Refresco cada 30 segundos.
-- Persistencia con Supabase.
+- Los canales se guardan en Supabase.
+- Todos los visitantes ven el mismo directorio.
+- La página consulta KICK cada 30 segundos.
+- Muestra EN VIVO / OFFLINE.
+- Cuando un canal está en vivo, muestra título, categoría, viewers y thumbnail si KICK los devuelve.
+- El botón abre el canal oficial de KICK.
 
-## Configuración
+## Variables necesarias en Vercel
 
-### 1. Supabase
-Crea un proyecto y ejecuta `supabase/schema.sql` en SQL Editor.
+```txt
+NEXT_PUBLIC_SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+KICK_CLIENT_ID=
+KICK_CLIENT_SECRET=
+```
 
-### 2. KICK
-Crea una aplicación de desarrollador de KICK y obtén Client ID + Client Secret.
+## SQL de Supabase
 
-### 3. Variables
-Copia `.env.example` a `.env.local` y completa las cuatro variables.
+Ejecuta el contenido de:
 
-### 4. Local
+```txt
+supabase/schema.sql
+```
+
+## Desarrollo local
+
 ```bash
 npm install
+cp .env.example .env.local
 npm run dev
 ```
 
-### 5. Publicar
-Importa este repositorio en Vercel y añade las mismas cuatro variables de entorno.
+## Publicar
 
-Nunca subas `KICK_CLIENT_SECRET` ni `SUPABASE_SERVICE_ROLE_KEY` a GitHub.
+En Vercel usa esta carpeta como Root Directory:
+
+```txt
+legion-de-streamers-v1
+```
+
+Luego agrega las 4 variables de entorno en Production.
