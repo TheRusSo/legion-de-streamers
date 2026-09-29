@@ -2,6 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+const MAIN_KICK_URL = "https://kick.com/soyelmoro";
+const DISCORD_URL = "https://discord.com/invite/dSuxTZGD5u";
+const MAIN_CHANNEL = "soyelmoro";
+
 type Channel = {
   slug: string;
   name: string;
@@ -189,6 +193,7 @@ export default function Page() {
   }
 
   const liveCount = channels.filter((channel) => channel.live).length;
+  const featuredChannel = channels.find((channel) => channel.slug.toLowerCase() === MAIN_CHANNEL);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -212,15 +217,60 @@ export default function Page() {
           <b>L</b>
           <span>LEGIÓN<small>DE STREAMERS</small></span>
         </div>
-        <a href="#directorio">EXPLORAR</a>
+        <div className="navLinks">
+          <a href={MAIN_KICK_URL} target="_blank" rel="noreferrer">KICK</a>
+          <a href={DISCORD_URL} target="_blank" rel="noreferrer">DISCORD</a>
+          <a href="#directorio">EXPLORAR</a>
+        </div>
       </nav>
 
-      <section className="hero">
-        <label>COMUNIDAD • KICK • CREADORES</label>
-        <h1>Tu comunidad.<br /><em>En vivo y conectada.</em></h1>
-        <p>
-          Añade uno o varios canales de KICK. El directorio evita duplicados y actualiza los perfiles automáticamente.
-        </p>
+      <section className="hero heroFeatured">
+        <div className="heroGrid">
+          <div className="heroCopy">
+            <label>COMUNIDAD • KICK • DISCORD</label>
+            <h1>SoyelMoro.<br /><em>Legión de Streamers.</em></h1>
+            <p>
+              Entra al canal principal, únete al Discord oficial y añade tu KICK para aparecer en el directorio de la comunidad.
+            </p>
+            <div className="primaryActions">
+              <a className="cta kickCta" href={MAIN_KICK_URL} target="_blank" rel="noreferrer">Ver canal de SoyelMoro ↗</a>
+              <a className="cta discordCta" href={DISCORD_URL} target="_blank" rel="noreferrer">Entrar al Discord</a>
+            </div>
+          </div>
+
+          <aside className="featuredPanel" aria-label="Canal principal SoyelMoro">
+            <div className="featuredGlow" />
+            <div className="featuredTop">
+              <span>CANAL PRINCIPAL</span>
+              <i>{featuredChannel?.live ? "● EN VIVO" : "OFFLINE"}</i>
+            </div>
+            <div className="coverPortrait">
+              {featuredChannel?.avatar ? (
+                <img src={featuredChannel.avatar} alt="SoyelMoro" />
+              ) : (
+                <strong>SM</strong>
+              )}
+            </div>
+            <h2>SoyelMoro</h2>
+            <p>@soyelmoro en KICK</p>
+            <div className="featuredMeta">
+              <span>{featuredChannel?.live ? (featuredChannel.title || "Transmitiendo ahora") : "Canal destacado de la comunidad"}</span>
+              <small>{featuredChannel?.live ? `${featuredChannel.category || "Gaming"} • ${featuredChannel.viewers || 0} viewers` : "Retos • Juegos • Charlas"}</small>
+            </div>
+            <a className="featuredButton" href={MAIN_KICK_URL} target="_blank" rel="noreferrer">Abrir canal oficial</a>
+          </aside>
+        </div>
+
+        <div className="communityCards">
+          <a className="communityCard" href={MAIN_KICK_URL} target="_blank" rel="noreferrer">
+            <b>KICK</b>
+            <span>Ve directo al canal oficial de SoyelMoro.</span>
+          </a>
+          <a className="communityCard discord" href={DISCORD_URL} target="_blank" rel="noreferrer">
+            <b>DISCORD</b>
+            <span>Únete, comparte tu canal y conecta con la comunidad.</span>
+          </a>
+        </div>
 
         <form onSubmit={addChannel}>
           <textarea
