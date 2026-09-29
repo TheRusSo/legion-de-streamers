@@ -56,6 +56,21 @@ function fallbackRows() {
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
+function mergeRowsWithMemory(rows: ChannelRow[]) {
+  const seen = new Set(rows.map((row) => row.slug.toLowerCase()));
+  const merged = [...rows];
+
+  for (const [slug, created_at] of memoryChannels.entries()) {
+    if (!seen.has(slug)) {
+      merged.push({ slug, created_at });
+      seen.add(slug);
+    }
+  }
+
+  if (merged.length === 0) return fallbackRows();
+  return merged.sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
 function addToMemory(slugs: string[]): AddResult {
   const added: string[] = [];
   const duplicates: string[] = [];
@@ -114,10 +129,11 @@ async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
   if (!cleanSlugs.length) return { added: [], duplicates: [] };
 
   const existing = await findExistingChannels(cleanSlugs);
-  const duplicates = cleanSlugs.filter((slug) => existing.has(slug));
-  const toAdd = cleanSlugs.filter((slug) => !existing.has(slug));
+  const memoryDuplicates = cleanSlugs.filter((slug) => memoryChannels.has(slug));
+  const duplicates = cleanSlugs.filter((slug) => existing.has(slug) || memoryChannels.has(slug));
+  const toAdd = cleanSlugs.filter((slug) => !existing.has(slug) && !memoryChannels.has(slug));
 
-  if (!toAdd.length) return { added: [], duplicates };
+  if (!toAdd.length) return { added: [], duplicates: unique([...duplicates, ...memoryDuplicates]) };
 
   const supabase = getSupabaseAdmin();
   const simpleRows = toAdd.map((slug) => ({ slug }));
@@ -145,10 +161,12 @@ async function ensureStarterChannels(rows: ChannelRow[]) {
     const freshRows = await readRowsFromSupabase();
     if (freshRows.length) return freshRows;
   } catch {
-    // Fallback below keeps the page alive even when Supabase blocks writes.
+    for (const slug of STARTER_CHANNELS) {
+      if (!memoryChannels.has(slug)) memoryChannels.set(slug, nowIso());
+    }
   }
 
-  return STARTER_CHANNELS.map((slug) => ({ slug, created_at: nowIso() }));
+  return fallbackRows();
 }
 
 async function hydrateRows(rows: ChannelRow[]) {
@@ -194,6 +212,7 @@ export async function GET() {
   try {
     rows = await readRowsFromSupabase();
     rows = await ensureStarterChannels(rows);
+    rows = mergeRowsWithMemory(rows);
   } catch (error) {
     storage = "fallback";
     storageWarning = getErrorMessage(error);
