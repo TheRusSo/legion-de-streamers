@@ -20,6 +20,17 @@ type OfficialKickChannel = {
   stream_title?: string;
   channel_description?: string;
   banner_picture?: string;
+  profile_picture?: string;
+  profile_pic?: string;
+  avatar?: string;
+  followers_count?: number;
+  followers?: number;
+  user?: {
+    username?: string;
+    profile_pic?: string;
+    profile_picture?: string;
+    avatar?: string;
+  } | null;
   category?: { name?: string; thumbnail?: string } | null;
   stream?: {
     is_live?: boolean;
@@ -105,7 +116,7 @@ function normalizeOfficialChannel(channel: OfficialKickChannel): NormalizedKickC
 
   return {
     slug,
-    name: channel.slug || slug,
+    name: firstString(channel.user?.username, channel.slug, slug),
     url: `https://kick.com/${slug}`,
     live,
     title: channel.stream_title || "",
@@ -113,9 +124,16 @@ function normalizeOfficialChannel(channel: OfficialKickChannel): NormalizedKickC
     category: channel.category?.name || "",
     viewers: channel.stream?.viewer_count || 0,
     thumbnail: channel.stream?.thumbnail || channel.category?.thumbnail || "",
-    avatar: "",
+    avatar: firstString(
+      channel.profile_picture,
+      channel.profile_pic,
+      channel.avatar,
+      channel.user?.profile_pic,
+      channel.user?.profile_picture,
+      channel.user?.avatar
+    ),
     banner: channel.banner_picture || "",
-    followers: 0,
+    followers: asNumber(channel.followers_count || channel.followers),
     started_at: channel.stream?.start_time || "",
     source: "official"
   };
@@ -127,13 +145,32 @@ function normalizePublicChannel(data: AnyRecord, requestedSlug: string): Normali
   const categories = Array.isArray(livestream?.categories) ? livestream.categories : [];
   const category = categories[0] || livestream?.category || data.category || {};
   const slug = cleanKickSlug(firstString(data.slug, data.username, user.username, requestedSlug)) || requestedSlug;
+  const banner = firstString(
+    data.banner_image?.url,
+    data.banner_image,
+    data.banner_picture,
+    data.banner,
+    data.cover_image,
+    data.cover_image?.url
+  );
+  const avatar = firstString(
+    user.profile_pic,
+    user.profile_picture,
+    user.avatar,
+    user.avatar_url,
+    data.profile_pic,
+    data.profile_picture,
+    data.avatar,
+    data.avatar_url
+  );
   const thumbnail = firstString(
     livestream?.thumbnail?.url,
     livestream?.thumbnail,
     livestream?.thumbnail_url,
     livestream?.banner_image,
+    data.thumbnail?.url,
     data.thumbnail,
-    data.banner_image?.url
+    banner
   );
 
   return {
@@ -146,11 +183,31 @@ function normalizePublicChannel(data: AnyRecord, requestedSlug: string): Normali
     category: firstString(category?.name, category?.slug),
     viewers: asNumber(livestream?.viewer_count),
     thumbnail,
-    avatar: firstString(user.profile_pic, user.profile_picture, data.profile_pic, data.profile_picture),
-    banner: firstString(data.banner_image?.url, data.banner_image, data.banner_picture),
+    avatar,
+    banner,
     followers: asNumber(data.followers_count || data.followersCount || data.followers),
     started_at: firstString(livestream?.created_at, livestream?.start_time, livestream?.started_at),
     source: "public"
+  };
+}
+
+function mergeKickChannel(primary: NormalizedKickChannel, extra?: NormalizedKickChannel | null): NormalizedKickChannel {
+  if (!extra) return primary;
+
+  return {
+    ...primary,
+    name: firstString(primary.name, extra.name, primary.slug),
+    title: firstString(primary.title, extra.title),
+    description: firstString(primary.description, extra.description),
+    category: firstString(primary.category, extra.category),
+    thumbnail: firstString(primary.thumbnail, extra.thumbnail, extra.banner, extra.avatar),
+    avatar: firstString(primary.avatar, extra.avatar, extra.banner, extra.thumbnail),
+    banner: firstString(primary.banner, extra.banner, extra.thumbnail),
+    followers: primary.followers || extra.followers || 0,
+    started_at: firstString(primary.started_at, extra.started_at),
+    live: primary.live || extra.live,
+    viewers: primary.viewers || extra.viewers || 0,
+    source: primary.source === "fallback" ? extra.source : primary.source
   };
 }
 
@@ -262,10 +319,11 @@ export async function fetchKickChannels(slugs: string[]) {
     // Continue with public profile fallback.
   }
 
-  const missing = unique.filter((slug) => !finalMap.has(slug));
-  if (missing.length) {
-    const publicMap = await fetchPublicChannels(missing);
-    for (const [slug, channel] of publicMap) finalMap.set(slug, channel);
+  // Siempre consultamos el perfil público para completar foto original, banner y seguidores.
+  const publicMap = await fetchPublicChannels(unique);
+  for (const slug of unique) {
+    const current = finalMap.get(slug) || fallbackKickChannel(slug);
+    finalMap.set(slug, mergeKickChannel(current, publicMap.get(slug)));
   }
 
   for (const slug of unique) {
