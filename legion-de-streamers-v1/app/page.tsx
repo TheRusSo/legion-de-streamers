@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 const MAIN_KICK_URL = "https://kick.com/soyelmoro";
 const DISCORD_URL = "https://discord.com/invite/dSuxTZGD5u";
 const MAIN_CHANNEL = "soyelmoro";
+const LOCAL_CHANNELS_KEY = "legion_streamers_local_channels";
 
 type Channel = {
   slug: string;
@@ -28,6 +29,8 @@ type ApiResult = {
   code?: string;
   warning?: string;
   message?: string;
+  storage?: string;
+  permanent?: boolean;
   added?: string[];
   duplicates?: string[];
   channels?: Channel[];
@@ -60,6 +63,32 @@ function extractLocalSlugs(input: string) {
   }
 
   return [...slugs];
+}
+
+function getStoredLocalSlugs() {
+  if (typeof window === "undefined") return [] as string[];
+
+  try {
+    return extractLocalSlugs(window.localStorage.getItem(LOCAL_CHANNELS_KEY) || "");
+  } catch {
+    return [] as string[];
+  }
+}
+
+function saveStoredLocalSlugs(slugs: string[]) {
+  if (typeof window === "undefined") return;
+
+  try {
+    const clean = [...new Set(slugs.map(cleanLocalSlug).filter(Boolean))];
+    window.localStorage.setItem(LOCAL_CHANNELS_KEY, clean.join("\n"));
+  } catch {
+    // localStorage may be blocked by the browser; ignore silently.
+  }
+}
+
+function addStoredLocalSlugs(slugs: string[]) {
+  const current = getStoredLocalSlugs();
+  saveStoredLocalSlugs([...current, ...slugs]);
 }
 
 function initials(value: string) {
@@ -109,7 +138,9 @@ export default function Page() {
 
   async function loadChannels() {
     try {
-      const res = await fetch("/api/channels", { cache: "no-store" });
+      const localSlugs = getStoredLocalSlugs();
+      const extra = localSlugs.length ? `?extra=${encodeURIComponent(localSlugs.join("\n"))}` : "";
+      const res = await fetch(`/api/channels${extra}`, { cache: "no-store" });
       const data = await readApiResult(res);
 
       if (!res.ok || data.ok === false) {
@@ -117,7 +148,7 @@ export default function Page() {
       }
 
       setChannels(data.channels || []);
-      setSystemNotice(data.warning ? `Aviso técnico: ${data.warning}` : "Perfiles y estado EN VIVO se actualizan automáticamente cada 30 segundos.");
+      setSystemNotice(data.warning || "Perfiles y estado EN VIVO se actualizan automáticamente cada 30 segundos.");
     } catch (error) {
       const text = error instanceof Error ? error.message : "Error desconocido.";
       setSystemNotice(text);
@@ -181,7 +212,10 @@ export default function Page() {
         setInput("");
       }
 
-      if (added.length && duplicates.length) {
+      if (added.length && data.permanent === false) {
+        addStoredLocalSlugs(added);
+        setMessage(`Añadido: ${formatList(added)}. Nota: Supabase está bloqueando el guardado global; se mostrará en este navegador.`);
+      } else if (added.length && duplicates.length) {
         setMessage(`Añadidos: ${formatList(added)}. Ya existían: ${formatList(duplicates)}.`);
       } else if (added.length) {
         setMessage(added.length === 1
@@ -192,7 +226,7 @@ export default function Page() {
       }
 
       await loadChannels();
-      setTimeout(() => setMessage(""), 4500);
+      setTimeout(() => setMessage(""), 6500);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Error desconocido.");
     } finally {
