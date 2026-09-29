@@ -192,13 +192,27 @@ async function hydrateRows(rows: ChannelRow[]) {
   return { channels, kickStatus };
 }
 
+function stringifyPayloadValue(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => stringifyPayloadValue(item));
+  }
+
+  if (typeof value === "string") return [value];
+  if (typeof value === "number") return [String(value)];
+  return [];
+}
+
 function parseRequestSlugs(body: Record<string, unknown>) {
-  const values = Array.isArray(body.channels)
-    ? body.channels
-    : [body.slug, body.url, body.channel, body.text];
+  const values = [
+    body.channels,
+    body.slug,
+    body.url,
+    body.channel,
+    body.text
+  ];
 
   const text = values
-    .filter((value): value is string => typeof value === "string")
+    .flatMap((value) => stringifyPayloadValue(value))
     .join("\n");
 
   return extractKickSlugs(text);
