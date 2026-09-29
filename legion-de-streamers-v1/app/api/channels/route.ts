@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { cleanKickSlug, fetchKickChannels } from "@/lib/kick";
+import { extractKickSlugs, fallbackKickChannel, fetchKickChannels } from "@/lib/kick";
 
 export const dynamic = "force-dynamic";
 
@@ -25,46 +25,84 @@ function getErrorMessage(error: unknown) {
   }
 }
 
-function offlineFallback(row: ChannelRow) {
-  return {
-    slug: row.slug,
-    name: row.slug,
-    url: `https://kick.com/${row.slug}`,
-    live: false,
-    status: "offline",
-    title: "",
-    description: "",
-    category: "",
-    viewers: 0,
-    thumbnail: "",
-    avatar: "",
-    banner: "",
-    followers: 0,
-    started_at: "",
-    created_at: row.created_at,
-    source: "local"
-  };
+function unique(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
 }
 
-async function upsertChannel(supabase: ReturnType<typeof getSupabaseAdmin>, slug: string) {
-  const first = await supabase
+function isMissingLegacyUserId(errorMessage: string) {
+  const text = errorMessage.toLowerCase();
+  return text.includes("user_id") || text.includes("null value in column");
+}
+
+function isDuplicateError(errorMessage: string) {
+  const text = errorMessage.toLowerCase();
+  return text.includes("duplicate") || text.includes("unique") || text.includes("23505");
+}
+
+async function findExistingChannels(supabase: ReturnType<typeof getSupabaseAdmin>, slugs: string[]) {
+  if (!slugs.length) return new Set<string>();
+
+  const { data, error } = await supabase
     .from("channels")
-    .upsert({ slug }, { onConflict: "slug" });
+    .select("slug")
+    .in("slug", slugs);
+
+  if (error) throw error;
+  return new Set((data || []).map((row: { slug: string }) => row.slug.toLowerCase()));
+}
+
+async function insertChannels(supabase: ReturnType<typeof getSupabaseAdmin>, slugs: string[]) {
+  const cleanSlugs = unique(slugs);
+  if (!cleanSlugs.length) return;
+
+  const simpleRows = cleanSlugs.map((slug) => ({ slug }));
+  const first = await supabase.from("channels").insert(simpleRows);
 
   if (!first.error) return;
 
-  const message = first.error.message || "";
-  const needsLegacyUserId =
-    message.toLowerCase().includes("user_id") ||
-    message.toLowerCase().includes("null value in column");
+  const message = first.error.message || String(first.error);
+  if (isDuplicateError(message)) return;
 
-  if (!needsLegacyUserId) throw first.error;
+  if (!isMissingLegacyUserId(message)) throw first.error;
 
-  const second = await supabase
-    .from("channels")
-    .upsert({ slug, user_id: 0 }, { onConflict: "slug" });
+  const legacyRows = cleanSlugs.map((slug) => ({ slug, user_id: 0 }));
+  const second = await supabase.from("channels").insert(legacyRows);
 
-  if (second.error) throw second.error;
+  if (second.error && !isDuplicateError(second.error.message || String(second.error))) {
+    throw second.error;
+  }
+}
+
+async function ensureStarterChannels(supabase: ReturnType<typeof getSupabaseAdmin>, rows: ChannelRow[]) {
+  if (rows.length > 0) return rows;
+
+  await insertChannels(supabase, STARTER_CHANNELS);
+  return STARTER_CHANNELS.map((slug) => ({ slug, created_at: nowIso() }));
+}
+
+function offlineRow(row: ChannelRow) {
+  return {
+    ...fallbackKickChannel(row.slug),
+    status: "offline",
+    created_at: row.created_at
+  };
+}
+
+async function hydrateRows(rows: ChannelRow[]) {
+  const kickMap = await fetchKickChannels(rows.map((row) => row.slug));
+
+  return rows
+    .map((row) => {
+      const kick = kickMap.get(row.slug.toLowerCase());
+      if (!kick) return offlineRow(row);
+
+      return {
+        ...kick,
+        status: kick.live ? "live" : "offline",
+        created_at: row.created_at
+      };
+    })
+    .sort((a, b) => Number(b.live) - Number(a.live));
 }
 
 export async function GET() {
@@ -77,68 +115,78 @@ export async function GET() {
 
     if (error) throw error;
 
-    let rows = (data || []) as ChannelRow[];
-
-    if (rows.length === 0) {
-      for (const slug of STARTER_CHANNELS) {
-        await upsertChannel(supabase, slug);
-      }
-      rows = STARTER_CHANNELS.map((slug) => ({ slug, created_at: nowIso() }));
-    }
-
-    let kickStatus = "ok";
-    const kickMap = await fetchKickChannels(rows.map((r) => r.slug)).catch(() => {
-      kickStatus = "error";
-      return new Map();
-    });
-
-    const channels = rows.map((row) => {
-      const kick = kickMap.get(row.slug.toLowerCase());
-      if (!kick) return offlineFallback(row);
-
-      return {
-        ...kick,
-        status: kick.live ? "live" : "offline",
-        created_at: row.created_at
-      };
-    });
-
-    channels.sort((a, b) => Number(b.live) - Number(a.live));
+    const rows = await ensureStarterChannels(supabase, (data || []) as ChannelRow[]);
+    const channels = await hydrateRows(rows);
 
     return NextResponse.json({
       ok: true,
       channels,
-      configured: {
-        supabase: true,
-        kick: true
-      },
-      kick_status: kickStatus,
+      configured: { supabase: true, kick: true },
       total: channels.length
     });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: getErrorMessage(error), channels: [] },
-      { status: 500 }
-    );
+    const fallbackRows = STARTER_CHANNELS.map((slug) => ({ slug, created_at: nowIso() }));
+    const channels = fallbackRows.map(offlineRow);
+
+    return NextResponse.json({
+      ok: true,
+      channels,
+      configured: { supabase: false, kick: false },
+      warning: getErrorMessage(error),
+      total: channels.length
+    });
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const slug = cleanKickSlug(String(body.slug || body.url || body.channel || ""));
+    const input = String(body.slug || body.url || body.channel || body.channels || "");
+    const slugs = extractKickSlugs(input);
 
-    if (!slug) {
-      return NextResponse.json({ ok: false, error: "Canal de KICK inválido." }, { status: 400 });
+    if (!slugs.length) {
+      return NextResponse.json(
+        { ok: false, code: "invalid", error: "Pega al menos un enlace o usuario válido de KICK." },
+        { status: 400 }
+      );
     }
 
     const supabase = getSupabaseAdmin();
-    await upsertChannel(supabase, slug);
+    const existing = await findExistingChannels(supabase, slugs);
+    const duplicates = slugs.filter((slug) => existing.has(slug));
+    const toAdd = slugs.filter((slug) => !existing.has(slug));
 
-    return NextResponse.json({ ok: true, slug });
+    if (!toAdd.length) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "duplicate",
+          error: duplicates.length === 1
+            ? "Ese canal ya está agregado."
+            : "Esos canales ya están agregados.",
+          duplicates
+        },
+        { status: 409 }
+      );
+    }
+
+    await insertChannels(supabase, toAdd);
+
+    const rows = toAdd.map((slug) => ({ slug, created_at: nowIso() }));
+    const channels = await hydrateRows(rows);
+
+    return NextResponse.json({
+      ok: true,
+      added: toAdd,
+      duplicates,
+      channels,
+      message: duplicates.length
+        ? `Se añadieron ${toAdd.length} canal(es). ${duplicates.length} ya existían.`
+        : `Se añadieron ${toAdd.length} canal(es).`
+    });
   } catch (error) {
     return NextResponse.json(
-      { ok: false, error: getErrorMessage(error) },
+      { ok: false, code: "server_error", error: getErrorMessage(error) },
       { status: 500 }
     );
   }
