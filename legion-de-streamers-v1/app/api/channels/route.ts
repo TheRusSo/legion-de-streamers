@@ -19,9 +19,6 @@ type AddResult = {
   duplicates: string[];
 };
 
-const STARTER_CHANNELS = ["soyelmoro", "deleeon", "aguila-gt", "rodrigonaheul05"];
-const memoryChannels = new Map<string, string>();
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -48,31 +45,6 @@ function isLegacyUserIdError(error: unknown) {
 
 function unique(values: string[]) {
   return [...new Set(values.filter(Boolean).map((value) => value.toLowerCase()))];
-}
-
-function fallbackRows() {
-  if (memoryChannels.size === 0) {
-    for (const slug of STARTER_CHANNELS) memoryChannels.set(slug, nowIso());
-  }
-
-  return [...memoryChannels.entries()]
-    .map(([slug, created_at]) => ({ slug, created_at }))
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
-}
-
-function mergeRowsWithMemory(rows: ChannelRow[]) {
-  const seen = new Set(rows.map((row) => row.slug.toLowerCase()));
-  const merged = [...rows];
-
-  for (const [slug, created_at] of memoryChannels.entries()) {
-    if (!seen.has(slug)) {
-      merged.push({ slug, created_at });
-      seen.add(slug);
-    }
-  }
-
-  if (merged.length === 0) return fallbackRows();
-  return merged.sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
 function offlineRow(row: ChannelRow) {
@@ -107,6 +79,21 @@ async function findExistingChannels(slugs: string[]) {
   return new Set((data || []).map((row: { slug: string }) => row.slug.toLowerCase()));
 }
 
+async function insertRows(slugs: string[]) {
+  const supabase = getSupabaseAdmin();
+  const simpleRows = slugs.map((slug) => ({ slug }));
+  const first = await supabase.from("channels").insert(simpleRows);
+
+  if (!first.error) return;
+  if (isDuplicateError(first.error)) throw first.error;
+  if (!isLegacyUserIdError(first.error)) throw first.error;
+
+  const legacyRows = slugs.map((slug) => ({ slug, user_id: 0 }));
+  const second = await supabase.from("channels").insert(legacyRows);
+
+  if (second.error) throw second.error;
+}
+
 async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
   const cleanSlugs = unique(slugs);
   if (!cleanSlugs.length) return { added: [], duplicates: [] };
@@ -117,48 +104,20 @@ async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
 
   if (!toAdd.length) return { added: [], duplicates };
 
-  const supabase = getSupabaseAdmin();
-  const simpleRows = toAdd.map((slug) => ({ slug }));
-  const first = await supabase.from("channels").insert(simpleRows);
-
-  if (!first.error) {
-    for (const slug of toAdd) memoryChannels.delete(slug);
-    return { added: toAdd, duplicates };
-  }
-
-  if (isDuplicateError(first.error)) return { added: [], duplicates: cleanSlugs };
-
-  if (!isLegacyUserIdError(first.error)) throw first.error;
-
-  const legacyRows = toAdd.map((slug) => ({ slug, user_id: 0 }));
-  const second = await supabase.from("channels").insert(legacyRows);
-
-  if (!second.error) {
-    for (const slug of toAdd) memoryChannels.delete(slug);
-    return { added: toAdd, duplicates };
-  }
-
-  if (isDuplicateError(second.error)) return { added: [], duplicates: cleanSlugs };
-
-  throw second.error;
-}
-
-async function ensureStarterChannels(rows: ChannelRow[]) {
-  // Solo sembramos los canales iniciales cuando la tabla está completamente vacía.
-  // Esto permite que el panel admin pueda eliminar o editar canales sin que vuelvan a aparecer.
-  if (rows.length > 0) return rows;
-
   try {
-    await insertSlugsIntoSupabase(STARTER_CHANNELS);
-    const freshRows = await readRowsFromSupabase();
-    if (freshRows.length) return freshRows;
-  } catch {
-    for (const slug of STARTER_CHANNELS) {
-      if (!memoryChannels.has(slug)) memoryChannels.set(slug, nowIso());
+    await insertRows(toAdd);
+    return { added: toAdd, duplicates };
+  } catch (error) {
+    if (isDuplicateError(error)) {
+      const freshExisting = await findExistingChannels(cleanSlugs);
+      return {
+        added: [],
+        duplicates: cleanSlugs.filter((slug) => freshExisting.has(slug))
+      };
     }
-  }
 
-  return rows;
+    throw error;
+  }
 }
 
 async function hydrateRows(rows: ChannelRow[]) {
@@ -211,32 +170,35 @@ function parseRequestSlugs(body: Record<string, unknown>) {
 }
 
 export async function GET() {
-  let storage = "supabase";
-  let rows: ChannelRow[] = [];
-  let storageWarning = "";
-
   try {
-    rows = await readRowsFromSupabase();
-    rows = await ensureStarterChannels(rows);
-    rows = mergeRowsWithMemory(rows);
+    const rows = await readRowsFromSupabase();
+    const { channels, kickStatus } = await hydrateRows(rows);
+
+    return NextResponse.json({
+      ok: true,
+      channels,
+      configured: { supabase: true, kick: kickStatus === "ok" },
+      storage: "supabase",
+      permanent: true,
+      kick_status: kickStatus,
+      total: channels.length
+    });
   } catch (error) {
-    storage = "fallback";
-    storageWarning = getErrorMessage(error);
-    rows = fallbackRows();
+    return NextResponse.json(
+      {
+        ok: false,
+        channels: [],
+        configured: { supabase: false, kick: false },
+        storage: "supabase",
+        permanent: false,
+        code: "storage_error",
+        error: "No se pudieron cargar los canales guardados. Revisa SUPABASE_SERVICE_ROLE_KEY y la tabla public.channels.",
+        storage_warning: getErrorMessage(error),
+        total: 0
+      },
+      { status: 500 }
+    );
   }
-
-  const { channels, kickStatus } = await hydrateRows(rows);
-
-  return NextResponse.json({
-    ok: true,
-    channels,
-    configured: { supabase: storage === "supabase", kick: kickStatus === "ok" },
-    storage,
-    permanent: storage === "supabase",
-    storage_warning: storageWarning,
-    kick_status: kickStatus,
-    total: channels.length
-  });
 }
 
 export async function POST(req: NextRequest) {
