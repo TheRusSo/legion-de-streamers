@@ -23,6 +23,7 @@ type ApiResult = {
 
 const STORAGE_KEY = "legion_admin_password";
 const PUBLIC_LOCAL_CHANNELS_KEY = "legion_streamers_local_channels";
+const PUBLIC_DELETED_CHANNELS_KEY = "legion_streamers_deleted_channels";
 
 function formatDate(value?: string) {
   if (!value) return "—";
@@ -62,25 +63,25 @@ function normalizeAdminInput(value: string) {
   return cleanAdminSlug(value);
 }
 
-function getPublicLocalSlugs() {
+function readStoredSlugs(key: string) {
   if (typeof window === "undefined") return [] as string[];
 
   try {
-    return extractAdminSlugs(window.localStorage.getItem(PUBLIC_LOCAL_CHANNELS_KEY) || "");
+    return extractAdminSlugs(window.localStorage.getItem(key) || "");
   } catch {
     return [] as string[];
   }
 }
 
-function savePublicLocalSlugs(slugs: string[]) {
+function saveStoredSlugs(key: string, slugs: string[]) {
   if (typeof window === "undefined") return;
 
   try {
     const clean = [...new Set(slugs.map(cleanAdminSlug).filter(Boolean))];
     if (clean.length) {
-      window.localStorage.setItem(PUBLIC_LOCAL_CHANNELS_KEY, clean.join("\n"));
+      window.localStorage.setItem(key, clean.join("\n"));
     } else {
-      window.localStorage.removeItem(PUBLIC_LOCAL_CHANNELS_KEY);
+      window.localStorage.removeItem(key);
     }
   } catch {
     // localStorage puede estar bloqueado por el navegador.
@@ -91,8 +92,19 @@ function removePublicLocalSlugs(slugs: string[]) {
   const removed = new Set(slugs.map(cleanAdminSlug).filter(Boolean));
   if (!removed.size) return;
 
-  const remaining = getPublicLocalSlugs().filter((slug) => !removed.has(slug));
-  savePublicLocalSlugs(remaining);
+  const localRemaining = readStoredSlugs(PUBLIC_LOCAL_CHANNELS_KEY).filter((slug) => !removed.has(slug));
+  const deletedChannels = readStoredSlugs(PUBLIC_DELETED_CHANNELS_KEY);
+
+  saveStoredSlugs(PUBLIC_LOCAL_CHANNELS_KEY, localRemaining);
+  saveStoredSlugs(PUBLIC_DELETED_CHANNELS_KEY, [...deletedChannels, ...removed]);
+}
+
+function restorePublicSlugs(slugs: string[]) {
+  const restored = new Set(slugs.map(cleanAdminSlug).filter(Boolean));
+  if (!restored.size) return;
+
+  const deletedRemaining = readStoredSlugs(PUBLIC_DELETED_CHANNELS_KEY).filter((slug) => !restored.has(slug));
+  saveStoredSlugs(PUBLIC_DELETED_CHANNELS_KEY, deletedRemaining);
 }
 
 function formatSlugList(values: string[]) {
@@ -250,6 +262,10 @@ export default function AdminPage() {
       const added = data.added || [];
       const duplicates = data.duplicates || [];
 
+      if (added.length) {
+        restorePublicSlugs(added);
+      }
+
       if (added.length && duplicates.length) {
         setNotice(`Añadidos: ${formatSlugList(added)}. Ya existían: ${formatSlugList(duplicates)}.`);
       } else if (added.length) {
@@ -282,6 +298,7 @@ export default function AdminPage() {
       });
 
       removePublicLocalSlugs([oldSlug]);
+      restorePublicSlugs([newSlug]);
       setNotice(`Actualizado: @${oldSlug} → @${newSlug}. Cambio aplicado en la página pública.`);
       setEdits((current) => ({ ...current, [oldSlug]: "" }));
       if (!data.channels) await loadChannels();
