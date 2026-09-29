@@ -45,19 +45,35 @@ function createSupabaseClient(key: string) {
   });
 }
 
+function getFirstAvailableKey() {
+  return serviceKey || anonKey;
+}
+
 export function getSupabaseReadClient() {
-  const key = serviceKey || anonKey;
+  const key = getFirstAvailableKey();
 
   if (!key) {
-    throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY o NEXT_PUBLIC_SUPABASE_ANON_KEY en Vercel.");
+    throw new Error("Falta una key de Supabase en Vercel. Configura SUPABASE_SERVICE_ROLE_KEY o NEXT_PUBLIC_SUPABASE_ANON_KEY.");
   }
 
   return createSupabaseClient(key);
 }
 
+export function getSupabasePublicWriteClient() {
+  const key = getFirstAvailableKey();
+
+  if (!key) {
+    throw new Error("Falta una key de Supabase en Vercel. Para añadir canales desde la página pública configura SUPABASE_SERVICE_ROLE_KEY o NEXT_PUBLIC_SUPABASE_ANON_KEY.");
+  }
+
+  // Para añadir canales públicos aceptamos service_role o anon.
+  // La seguridad la controla la primary key y las policies de public.channels.
+  return createSupabaseClient(key);
+}
+
 export function getSupabaseAdmin() {
   if (!serviceKey) {
-    throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en Vercel. Para añadir, editar y eliminar canales necesitas la key service_role de Supabase.");
+    throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en Vercel. Para editar y eliminar canales desde /admin necesitas la key service_role de Supabase.");
   }
 
   const role = getJwtRole(serviceKey);
