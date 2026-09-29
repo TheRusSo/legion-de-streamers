@@ -19,7 +19,7 @@ type AddResult = {
   duplicates: string[];
 };
 
-const STARTER_CHANNELS = ["soyelmoro"];
+const STARTER_CHANNELS = ["soyelmoro", "deleeon", "aguila-gt", "rodrigonaheul05"];
 const memoryChannels = new Map<string, string>();
 
 function nowIso() {
@@ -44,6 +44,10 @@ function isDuplicateError(error: unknown) {
 function isLegacyUserIdError(error: unknown) {
   const text = getErrorMessage(error).toLowerCase();
   return text.includes("user_id") || text.includes("null value in column");
+}
+
+function unique(values: string[]) {
+  return [...new Set(values.filter(Boolean).map((value) => value.toLowerCase()))];
 }
 
 function fallbackRows() {
@@ -75,7 +79,7 @@ function addToMemory(slugs: string[]): AddResult {
   const added: string[] = [];
   const duplicates: string[] = [];
 
-  for (const slug of slugs) {
+  for (const slug of unique(slugs)) {
     if (memoryChannels.has(slug)) {
       duplicates.push(slug);
       continue;
@@ -86,10 +90,6 @@ function addToMemory(slugs: string[]): AddResult {
   }
 
   return { added, duplicates };
-}
-
-function unique(values: string[]) {
-  return [...new Set(values.filter(Boolean).map((value) => value.toLowerCase()))];
 }
 
 function offlineRow(row: ChannelRow) {
@@ -154,19 +154,22 @@ async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
 }
 
 async function ensureStarterChannels(rows: ChannelRow[]) {
-  if (rows.length > 0) return rows;
+  const existing = new Set(rows.map((row) => row.slug.toLowerCase()));
+  const missing = STARTER_CHANNELS.filter((slug) => !existing.has(slug) && !memoryChannels.has(slug));
+
+  if (!missing.length) return rows;
 
   try {
-    await insertSlugsIntoSupabase(STARTER_CHANNELS);
+    await insertSlugsIntoSupabase(missing);
     const freshRows = await readRowsFromSupabase();
     if (freshRows.length) return freshRows;
   } catch {
-    for (const slug of STARTER_CHANNELS) {
+    for (const slug of missing) {
       if (!memoryChannels.has(slug)) memoryChannels.set(slug, nowIso());
     }
   }
 
-  return fallbackRows();
+  return rows;
 }
 
 async function hydrateRows(rows: ChannelRow[]) {
