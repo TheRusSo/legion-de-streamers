@@ -154,17 +154,16 @@ async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
 }
 
 async function ensureStarterChannels(rows: ChannelRow[]) {
-  const existing = new Set(rows.map((row) => row.slug.toLowerCase()));
-  const missing = STARTER_CHANNELS.filter((slug) => !existing.has(slug) && !memoryChannels.has(slug));
-
-  if (!missing.length) return rows;
+  // Solo sembramos los canales iniciales cuando la tabla está completamente vacía.
+  // Esto permite que el panel admin pueda eliminar o editar canales sin que vuelvan a aparecer.
+  if (rows.length > 0) return rows;
 
   try {
-    await insertSlugsIntoSupabase(missing);
+    await insertSlugsIntoSupabase(STARTER_CHANNELS);
     const freshRows = await readRowsFromSupabase();
     if (freshRows.length) return freshRows;
   } catch {
-    for (const slug of missing) {
+    for (const slug of STARTER_CHANNELS) {
       if (!memoryChannels.has(slug)) memoryChannels.set(slug, nowIso());
     }
   }
