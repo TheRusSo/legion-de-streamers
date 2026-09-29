@@ -213,10 +213,7 @@ export default function Page() {
   return (
     <main>
       <nav>
-        <div className="brand">
-          <b>L</b>
-          <span>LEGIÓN<small>DE STREAMERS</small></span>
-        </div>
+        <div className="brand" aria-label="Legión de Streamers" />
         <div className="navLinks">
           <a href={DISCORD_URL} target="_blank" rel="noreferrer">DISCORD</a>
           <a href="#directorio">EXPLORAR</a>
