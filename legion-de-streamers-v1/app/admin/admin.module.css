@@ -1,0 +1,257 @@
+.adminPage{
+  min-height:100vh;
+  padding:42px 18px 70px;
+  color:#f8f5ff;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(139,92,246,.22), transparent 36%),
+    radial-gradient(circle at 80% 12%, rgba(216,80,255,.16), transparent 34%),
+    #050408;
+}
+
+.shell{
+  width:min(1120px,100%);
+  margin:0 auto;
+}
+
+.top{
+  display:flex;
+  justify-content:space-between;
+  gap:22px;
+  align-items:flex-start;
+  margin-bottom:26px;
+}
+
+.badge{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  color:#c79cff;
+  border:1px solid rgba(199,156,255,.3);
+  background:rgba(139,92,246,.08);
+  padding:8px 12px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:900;
+  letter-spacing:.16em;
+}
+
+.title{
+  margin:16px 0 8px;
+  font-size:clamp(34px,6vw,72px);
+  line-height:.95;
+  letter-spacing:-.06em;
+}
+
+.title span{
+  display:block;
+  color:#a855f7;
+}
+
+.text{
+  margin:0;
+  max-width:720px;
+  color:#aaa1b8;
+  font-size:16px;
+  line-height:1.6;
+}
+
+.card{
+  border:1px solid rgba(255,255,255,.1);
+  background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.025));
+  box-shadow:0 24px 80px rgba(0,0,0,.38);
+  border-radius:26px;
+  padding:22px;
+}
+
+.login{
+  width:min(520px,100%);
+  margin:52px auto 0;
+}
+
+.formGrid{
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:12px;
+  margin-top:18px;
+}
+
+.input,
+.textarea{
+  width:100%;
+  border:1px solid rgba(255,255,255,.12);
+  background:#0c0912;
+  color:#fff;
+  outline:none;
+  border-radius:16px;
+  padding:15px 16px;
+  font:inherit;
+}
+
+.textarea{
+  min-height:86px;
+  resize:vertical;
+}
+
+.input:focus,
+.textarea:focus{
+  border-color:rgba(168,85,247,.7);
+  box-shadow:0 0 0 4px rgba(168,85,247,.12);
+}
+
+.button,
+.ghostButton,
+.dangerButton{
+  border:0;
+  border-radius:16px;
+  padding:14px 18px;
+  color:#fff;
+  font-weight:1000;
+  letter-spacing:.04em;
+  cursor:pointer;
+  transition:.18s ease;
+  white-space:nowrap;
+}
+
+.button{
+  background:linear-gradient(135deg,#7c3aed,#a855f7);
+  box-shadow:0 14px 36px rgba(124,58,237,.28);
+}
+
+.ghostButton{
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.12);
+}
+
+.dangerButton{
+  background:linear-gradient(135deg,#dc2626,#f97316);
+}
+
+.button:hover,
+.ghostButton:hover,
+.dangerButton:hover{
+  transform:translateY(-1px);
+  filter:brightness(1.08);
+}
+
+.button:disabled,
+.ghostButton:disabled,
+.dangerButton:disabled{
+  cursor:not-allowed;
+  opacity:.55;
+  transform:none;
+}
+
+.actions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  align-items:center;
+}
+
+.panel{
+  display:grid;
+  gap:18px;
+}
+
+.addBox{
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:12px;
+  align-items:stretch;
+}
+
+.notice,
+.error{
+  margin-top:14px;
+  border-radius:16px;
+  padding:13px 15px;
+  font-weight:800;
+}
+
+.notice{
+  color:#d8c8ff;
+  background:rgba(124,58,237,.13);
+  border:1px solid rgba(168,85,247,.26);
+}
+
+.error{
+  color:#fecaca;
+  background:rgba(185,28,28,.16);
+  border:1px solid rgba(248,113,113,.25);
+}
+
+.tableWrap{
+  overflow:auto;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:22px;
+}
+
+.table{
+  width:100%;
+  border-collapse:collapse;
+  min-width:760px;
+}
+
+.table th,
+.table td{
+  padding:14px 16px;
+  border-bottom:1px solid rgba(255,255,255,.07);
+  text-align:left;
+}
+
+.table th{
+  color:#c4b5fd;
+  font-size:12px;
+  text-transform:uppercase;
+  letter-spacing:.12em;
+}
+
+.table td{
+  color:#f6f1ff;
+}
+
+.slug{
+  font-weight:1000;
+  letter-spacing:.02em;
+}
+
+.miniInput{
+  width:220px;
+  max-width:100%;
+  border:1px solid rgba(255,255,255,.12);
+  background:#09070e;
+  color:#fff;
+  border-radius:13px;
+  padding:11px 12px;
+  outline:none;
+}
+
+.link{
+  color:#c084fc;
+  text-decoration:none;
+  font-weight:900;
+}
+
+.small{
+  color:#7f768d;
+  font-size:12px;
+}
+
+.empty{
+  padding:30px;
+  color:#aaa1b8;
+  text-align:center;
+}
+
+@media(max-width:760px){
+  .top,
+  .formGrid,
+  .addBox{
+    grid-template-columns:1fr;
+    display:grid;
+  }
+
+  .actions{
+    justify-content:flex-start;
+  }
+}
