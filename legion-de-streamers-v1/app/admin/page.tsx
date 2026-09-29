@@ -14,7 +14,10 @@ type ApiResult = {
   code?: string;
   channels?: AdminChannel[];
   added?: string[];
+  duplicates?: string[];
   deleted?: string;
+  total?: number;
+  permanent?: boolean;
   updated?: { oldSlug: string; newSlug: string };
 };
 
@@ -34,6 +37,11 @@ function formatDate(value?: string) {
 
 function normalizeAdminInput(value: string) {
   return value.trim().replace(/^@/, "").replace(/^https?:\/\/(www\.)?kick\.com\//i, "");
+}
+
+function formatSlugList(values: string[]) {
+  if (!values.length) return "";
+  return values.map((slug) => `@${slug}`).join(", ");
 }
 
 async function readApi(res: Response): Promise<ApiResult> {
@@ -84,6 +92,12 @@ export default function AdminPage() {
     };
   }
 
+  function syncChannels(data: ApiResult) {
+    if (Array.isArray(data.channels)) {
+      setChannels(data.channels);
+    }
+  }
+
   async function request(path: string, options: RequestInit = {}) {
     const res = await fetch(path, {
       ...options,
@@ -99,6 +113,7 @@ export default function AdminPage() {
       throw new Error(data.error || "No se pudo completar la acción.");
     }
 
+    syncChannels(data);
     return data;
   }
 
@@ -118,7 +133,7 @@ export default function AdminPage() {
       }
 
       setChannels(data.channels || []);
-      setNotice(`Panel cargado. Canales: ${data.channels?.length || 0}`);
+      setNotice(`Panel sincronizado con la página pública. Canales: ${data.channels?.length || 0}`);
     } catch (err) {
       setUnlocked(false);
       window.localStorage.removeItem(STORAGE_KEY);
@@ -165,8 +180,20 @@ export default function AdminPage() {
       });
 
       setNewChannels("");
-      setNotice(`Añadido: ${(data.added || []).map((slug) => `@${slug}`).join(", ")}`);
-      await loadChannels();
+      const added = data.added || [];
+      const duplicates = data.duplicates || [];
+
+      if (added.length && duplicates.length) {
+        setNotice(`Añadidos: ${formatSlugList(added)}. Ya existían: ${formatSlugList(duplicates)}.`);
+      } else if (added.length) {
+        setNotice(`Añadidos: ${formatSlugList(added)}. Ya aparecen en la página pública.`);
+      } else if (duplicates.length) {
+        setNotice(`No se agregó nada nuevo. Ya existían: ${formatSlugList(duplicates)}.`);
+      } else {
+        setNotice("No se agregó ningún canal nuevo.");
+      }
+
+      if (!data.channels) await loadChannels();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error desconocido.");
     } finally {
@@ -182,14 +209,14 @@ export default function AdminPage() {
     setError("");
 
     try {
-      await request("/api/admin/channels", {
+      const data = await request("/api/admin/channels", {
         method: "PATCH",
         body: JSON.stringify({ oldSlug, newSlug })
       });
 
-      setNotice(`Actualizado: @${oldSlug} → @${newSlug}`);
+      setNotice(`Actualizado: @${oldSlug} → @${newSlug}. Cambio aplicado en la página pública.`);
       setEdits((current) => ({ ...current, [oldSlug]: "" }));
-      await loadChannels();
+      if (!data.channels) await loadChannels();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error desconocido.");
     } finally {
@@ -198,19 +225,19 @@ export default function AdminPage() {
   }
 
   async function deleteChannel(slug: string) {
-    const ok = window.confirm(`¿Eliminar @${slug} del directorio?`);
+    const ok = window.confirm(`¿Eliminar @${slug} del directorio público?`);
     if (!ok) return;
 
     setBusySlug(slug);
     setError("");
 
     try {
-      await request(`/api/admin/channels?slug=${encodeURIComponent(slug)}`, {
+      const data = await request(`/api/admin/channels?slug=${encodeURIComponent(slug)}`, {
         method: "DELETE"
       });
 
-      setNotice(`Eliminado: @${slug}`);
-      await loadChannels();
+      setNotice(`Eliminado: @${slug}. Ya no aparecerá en la página pública.`);
+      if (!data.channels) await loadChannels();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error desconocido.");
     } finally {
@@ -256,11 +283,12 @@ export default function AdminPage() {
             <span className={styles.badge}>PANEL PRIVADO</span>
             <h1 className={styles.title}>Gestionar <span>canales</span></h1>
             <p className={styles.text}>
-              Añade, edita o elimina canales del directorio sin tocar la página pública ni la lógica de KICK.
+              Este panel está entrelazado con la página pública: todo canal que añadas, edites o elimines aquí se refleja en el directorio principal.
             </p>
           </div>
 
           <div className={styles.actions}>
+            <a className={styles.ghostButton} href="/" target="_blank" rel="noreferrer">VER PÁGINA</a>
             <button className={styles.ghostButton} onClick={() => loadChannels()} disabled={loading}>ACTUALIZAR</button>
             <button className={styles.dangerButton} onClick={logout}>SALIR</button>
           </div>
