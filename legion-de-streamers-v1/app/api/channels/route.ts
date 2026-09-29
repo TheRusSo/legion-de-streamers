@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { extractKickSlugs, fallbackKickChannel, fetchKickChannels } from "@/lib/kick";
+import {
+  extractKickSlugs,
+  fallbackKickChannel,
+  fetchKickChannels,
+  type NormalizedKickChannel
+} from "@/lib/kick";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +14,13 @@ type ChannelRow = {
   created_at: string;
 };
 
+type AddResult = {
+  added: string[];
+  duplicates: string[];
+};
+
 const STARTER_CHANNELS = ["soyelmoro"];
+const memoryChannels = new Map<string, string>();
 
 function nowIso() {
   return new Date().toISOString();
@@ -25,59 +36,45 @@ function getErrorMessage(error: unknown) {
   }
 }
 
-function unique(values: string[]) {
-  return [...new Set(values.filter(Boolean))];
+function isDuplicateError(error: unknown) {
+  const text = getErrorMessage(error).toLowerCase();
+  return text.includes("duplicate") || text.includes("unique") || text.includes("23505") || text.includes("already exists");
 }
 
-function isMissingLegacyUserId(errorMessage: string) {
-  const text = errorMessage.toLowerCase();
+function isLegacyUserIdError(error: unknown) {
+  const text = getErrorMessage(error).toLowerCase();
   return text.includes("user_id") || text.includes("null value in column");
 }
 
-function isDuplicateError(errorMessage: string) {
-  const text = errorMessage.toLowerCase();
-  return text.includes("duplicate") || text.includes("unique") || text.includes("23505");
-}
-
-async function findExistingChannels(supabase: ReturnType<typeof getSupabaseAdmin>, slugs: string[]) {
-  if (!slugs.length) return new Set<string>();
-
-  const { data, error } = await supabase
-    .from("channels")
-    .select("slug")
-    .in("slug", slugs);
-
-  if (error) throw error;
-  return new Set((data || []).map((row: { slug: string }) => row.slug.toLowerCase()));
-}
-
-async function insertChannels(supabase: ReturnType<typeof getSupabaseAdmin>, slugs: string[]) {
-  const cleanSlugs = unique(slugs);
-  if (!cleanSlugs.length) return;
-
-  const simpleRows = cleanSlugs.map((slug) => ({ slug }));
-  const first = await supabase.from("channels").insert(simpleRows);
-
-  if (!first.error) return;
-
-  const message = first.error.message || String(first.error);
-  if (isDuplicateError(message)) return;
-
-  if (!isMissingLegacyUserId(message)) throw first.error;
-
-  const legacyRows = cleanSlugs.map((slug) => ({ slug, user_id: 0 }));
-  const second = await supabase.from("channels").insert(legacyRows);
-
-  if (second.error && !isDuplicateError(second.error.message || String(second.error))) {
-    throw second.error;
+function fallbackRows() {
+  if (memoryChannels.size === 0) {
+    for (const slug of STARTER_CHANNELS) memoryChannels.set(slug, nowIso());
   }
+
+  return [...memoryChannels.entries()]
+    .map(([slug, created_at]) => ({ slug, created_at }))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-async function ensureStarterChannels(supabase: ReturnType<typeof getSupabaseAdmin>, rows: ChannelRow[]) {
-  if (rows.length > 0) return rows;
+function addToMemory(slugs: string[]): AddResult {
+  const added: string[] = [];
+  const duplicates: string[] = [];
 
-  await insertChannels(supabase, STARTER_CHANNELS);
-  return STARTER_CHANNELS.map((slug) => ({ slug, created_at: nowIso() }));
+  for (const slug of slugs) {
+    if (memoryChannels.has(slug)) {
+      duplicates.push(slug);
+      continue;
+    }
+
+    memoryChannels.set(slug, nowIso());
+    added.push(slug);
+  }
+
+  return { added, duplicates };
+}
+
+function unique(values: string[]) {
+  return [...new Set(values.filter(Boolean).map((value) => value.toLowerCase()))];
 }
 
 function offlineRow(row: ChannelRow) {
@@ -88,10 +85,80 @@ function offlineRow(row: ChannelRow) {
   };
 }
 
-async function hydrateRows(rows: ChannelRow[]) {
-  const kickMap = await fetchKickChannels(rows.map((row) => row.slug));
+async function readRowsFromSupabase() {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("channels")
+    .select("slug, created_at")
+    .order("created_at", { ascending: false });
 
-  return rows
+  if (error) throw error;
+  return (data || []) as ChannelRow[];
+}
+
+async function findExistingChannels(slugs: string[]) {
+  if (!slugs.length) return new Set<string>();
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("channels")
+    .select("slug")
+    .in("slug", slugs);
+
+  if (error) throw error;
+  return new Set((data || []).map((row: { slug: string }) => row.slug.toLowerCase()));
+}
+
+async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
+  const cleanSlugs = unique(slugs);
+  if (!cleanSlugs.length) return { added: [], duplicates: [] };
+
+  const existing = await findExistingChannels(cleanSlugs);
+  const duplicates = cleanSlugs.filter((slug) => existing.has(slug));
+  const toAdd = cleanSlugs.filter((slug) => !existing.has(slug));
+
+  if (!toAdd.length) return { added: [], duplicates };
+
+  const supabase = getSupabaseAdmin();
+  const simpleRows = toAdd.map((slug) => ({ slug }));
+  const first = await supabase.from("channels").insert(simpleRows);
+
+  if (!first.error) return { added: toAdd, duplicates };
+  if (isDuplicateError(first.error)) return { added: [], duplicates: cleanSlugs };
+
+  if (!isLegacyUserIdError(first.error)) throw first.error;
+
+  const legacyRows = toAdd.map((slug) => ({ slug, user_id: 0 }));
+  const second = await supabase.from("channels").insert(legacyRows);
+
+  if (!second.error) return { added: toAdd, duplicates };
+  if (isDuplicateError(second.error)) return { added: [], duplicates: cleanSlugs };
+
+  throw second.error;
+}
+
+async function ensureStarterChannels(rows: ChannelRow[]) {
+  if (rows.length > 0) return rows;
+
+  try {
+    await insertSlugsIntoSupabase(STARTER_CHANNELS);
+    const freshRows = await readRowsFromSupabase();
+    if (freshRows.length) return freshRows;
+  } catch {
+    // Fallback below keeps the page alive even when Supabase blocks writes.
+  }
+
+  return STARTER_CHANNELS.map((slug) => ({ slug, created_at: nowIso() }));
+}
+
+async function hydrateRows(rows: ChannelRow[]) {
+  let kickStatus = "ok";
+  const kickMap: Map<string, NormalizedKickChannel> = await fetchKickChannels(rows.map((row) => row.slug)).catch(() => {
+    kickStatus = "error";
+    return new Map<string, NormalizedKickChannel>();
+  });
+
+  const channels = rows
     .map((row) => {
       const kick = kickMap.get(row.slug.toLowerCase());
       if (!kick) return offlineRow(row);
@@ -102,92 +169,93 @@ async function hydrateRows(rows: ChannelRow[]) {
         created_at: row.created_at
       };
     })
-    .sort((a, b) => Number(b.live) - Number(a.live));
+    .sort((a, b) => Number(b.live) - Number(a.live) || a.name.localeCompare(b.name));
+
+  return { channels, kickStatus };
+}
+
+function parseRequestSlugs(body: Record<string, unknown>) {
+  const values = Array.isArray(body.channels)
+    ? body.channels
+    : [body.slug, body.url, body.channel, body.text];
+
+  const text = values
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
+
+  return extractKickSlugs(text);
 }
 
 export async function GET() {
+  let storage = "supabase";
+  let rows: ChannelRow[] = [];
+  let storageWarning = "";
+
   try {
-    const supabase = getSupabaseAdmin();
-    const { data, error } = await supabase
-      .from("channels")
-      .select("slug, created_at")
-      .order("created_at", { ascending: false });
-
-    if (error) throw error;
-
-    const rows = await ensureStarterChannels(supabase, (data || []) as ChannelRow[]);
-    const channels = await hydrateRows(rows);
-
-    return NextResponse.json({
-      ok: true,
-      channels,
-      configured: { supabase: true, kick: true },
-      total: channels.length
-    });
+    rows = await readRowsFromSupabase();
+    rows = await ensureStarterChannels(rows);
   } catch (error) {
-    const fallbackRows = STARTER_CHANNELS.map((slug) => ({ slug, created_at: nowIso() }));
-    const channels = fallbackRows.map(offlineRow);
-
-    return NextResponse.json({
-      ok: true,
-      channels,
-      configured: { supabase: false, kick: false },
-      warning: getErrorMessage(error),
-      total: channels.length
-    });
+    storage = "fallback";
+    storageWarning = getErrorMessage(error);
+    rows = fallbackRows();
   }
+
+  const { channels, kickStatus } = await hydrateRows(rows);
+
+  return NextResponse.json({
+    ok: true,
+    channels,
+    configured: { supabase: storage === "supabase", kick: kickStatus === "ok" },
+    storage,
+    permanent: storage === "supabase",
+    storage_warning: storageWarning,
+    kick_status: kickStatus,
+    total: channels.length
+  });
 }
 
 export async function POST(req: NextRequest) {
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  const slugs = parseRequestSlugs(body);
+
+  if (!slugs.length) {
+    return NextResponse.json(
+      { ok: false, code: "invalid", error: "Pega al menos un enlace o usuario válido de KICK." },
+      { status: 400 }
+    );
+  }
+
   try {
-    const body = await req.json().catch(() => ({}));
-    const input = String(body.slug || body.url || body.channel || body.channels || "");
-    const slugs = extractKickSlugs(input);
-
-    if (!slugs.length) {
-      return NextResponse.json(
-        { ok: false, code: "invalid", error: "Pega al menos un enlace o usuario válido de KICK." },
-        { status: 400 }
-      );
-    }
-
-    const supabase = getSupabaseAdmin();
-    const existing = await findExistingChannels(supabase, slugs);
-    const duplicates = slugs.filter((slug) => existing.has(slug));
-    const toAdd = slugs.filter((slug) => !existing.has(slug));
-
-    if (!toAdd.length) {
-      return NextResponse.json(
-        {
-          ok: false,
-          code: "duplicate",
-          error: duplicates.length === 1
-            ? "Ese canal ya está agregado."
-            : "Esos canales ya están agregados.",
-          duplicates
-        },
-        { status: 409 }
-      );
-    }
-
-    await insertChannels(supabase, toAdd);
-
-    const rows = toAdd.map((slug) => ({ slug, created_at: nowIso() }));
-    const channels = await hydrateRows(rows);
+    const result = await insertSlugsIntoSupabase(slugs);
+    const rows = result.added.map((slug) => ({ slug, created_at: nowIso() }));
+    const { channels } = await hydrateRows(rows);
 
     return NextResponse.json({
       ok: true,
-      added: toAdd,
-      duplicates,
+      storage: "supabase",
+      permanent: true,
+      ...result,
       channels,
-      message: duplicates.length
-        ? `Se añadieron ${toAdd.length} canal(es). ${duplicates.length} ya existían.`
-        : `Se añadieron ${toAdd.length} canal(es).`
+      message: result.added.length
+        ? `Se añadieron ${result.added.length} canal(es).${result.duplicates.length ? ` ${result.duplicates.length} ya existían.` : ""}`
+        : "Todos esos canales ya estaban agregados."
     });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, code: "server_error", error: getErrorMessage(error) },
-      { status: 500 }
-    );
+    const result = addToMemory(slugs);
+    const rows = result.added.map((slug) => ({ slug, created_at: nowIso() }));
+    const { channels } = await hydrateRows(rows);
+
+    return NextResponse.json({
+      ok: true,
+      storage: "fallback",
+      permanent: false,
+      warning: "Supabase bloqueó la escritura. Los canales se muestran sin romper la página.",
+      supabase_error: getErrorMessage(error),
+      ...result,
+      channels,
+      message: result.added.length
+        ? `Se añadieron ${result.added.length} canal(es).${result.duplicates.length ? ` ${result.duplicates.length} ya existían.` : ""}`
+        : "Todos esos canales ya estaban agregados."
+    });
   }
 }
