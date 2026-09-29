@@ -218,57 +218,21 @@ export default function Page() {
           <span>LEGIÓN<small>DE STREAMERS</small></span>
         </div>
         <div className="navLinks">
-          <a href={MAIN_KICK_URL} target="_blank" rel="noreferrer">KICK</a>
           <a href={DISCORD_URL} target="_blank" rel="noreferrer">DISCORD</a>
           <a href="#directorio">EXPLORAR</a>
         </div>
       </nav>
 
-      <section className="hero heroFeatured">
-        <div className="heroGrid">
-          <div className="heroCopy">
-            <label>COMUNIDAD • KICK • DISCORD</label>
-            <h1>SoyelMoro.<br /><em>Legión de Streamers.</em></h1>
-            <p>
-              Entra al canal principal, únete al Discord oficial y añade tu KICK para aparecer en el directorio de la comunidad.
-            </p>
-            <div className="primaryActions">
-              <a className="cta kickCta" href={MAIN_KICK_URL} target="_blank" rel="noreferrer">Ver canal de SoyelMoro ↗</a>
-              <a className="cta discordCta" href={DISCORD_URL} target="_blank" rel="noreferrer">Entrar al Discord</a>
-            </div>
-          </div>
+      <section className="hero">
+        <label>COMUNIDAD • KICK • DISCORD</label>
+        <h1>Legión de Streamers.<br /><em>Crece con la comunidad.</em></h1>
+        <p>
+          Únete al Discord oficial, comparte tu canal de KICK y aparece en el directorio junto a los demás miembros.
+        </p>
 
-          <aside className="featuredPanel" aria-label="Canal principal SoyelMoro">
-            <div className="featuredGlow" />
-            <div className="featuredTop">
-              <span>CANAL PRINCIPAL</span>
-              <i>{featuredChannel?.live ? "● EN VIVO" : "OFFLINE"}</i>
-            </div>
-            <div className="coverPortrait">
-              {featuredChannel?.avatar ? (
-                <img src={featuredChannel.avatar} alt="SoyelMoro" />
-              ) : (
-                <strong>SM</strong>
-              )}
-            </div>
-            <h2>SoyelMoro</h2>
-            <p>@soyelmoro en KICK</p>
-            <div className="featuredMeta">
-              <span>{featuredChannel?.live ? (featuredChannel.title || "Transmitiendo ahora") : "Canal destacado de la comunidad"}</span>
-              <small>{featuredChannel?.live ? `${featuredChannel.category || "Gaming"} • ${featuredChannel.viewers || 0} viewers` : "Retos • Juegos • Charlas"}</small>
-            </div>
-            <a className="featuredButton" href={MAIN_KICK_URL} target="_blank" rel="noreferrer">Abrir canal oficial</a>
-          </aside>
-        </div>
-
-        <div className="communityCards">
-          <a className="communityCard" href={MAIN_KICK_URL} target="_blank" rel="noreferrer">
-            <b>KICK</b>
-            <span>Ve directo al canal oficial de SoyelMoro.</span>
-          </a>
-          <a className="communityCard discord" href={DISCORD_URL} target="_blank" rel="noreferrer">
-            <b>DISCORD</b>
-            <span>Únete, comparte tu canal y conecta con la comunidad.</span>
+        <div className="singleAction">
+          <a className="discordMainButton" href={DISCORD_URL} target="_blank" rel="noreferrer">
+            Entrar al Discord oficial
           </a>
         </div>
 
@@ -291,6 +255,38 @@ export default function Page() {
           <div><strong>{liveCount}</strong><small>EN VIVO</small></div>
           <div><strong>30s</strong><small>ACTUALIZACIÓN</small></div>
         </div>
+      </section>
+
+      <section className="featuredSection" aria-label="Streamer destacado">
+        <div className="featuredHeader">
+          <label>DESTACADO</label>
+          <h2>Canal destacado de la comunidad</h2>
+        </div>
+
+        <article className="featuredCard">
+          <div
+            className="featuredCover"
+            style={featuredChannel?.thumbnail ? { backgroundImage: `linear-gradient(#09070d99,#09070ddd), url(${featuredChannel.thumbnail})` } : undefined}
+          >
+            {featuredChannel?.avatar ? (
+              <img src={featuredChannel.avatar} alt="SoyelMoro" />
+            ) : (
+              <strong>SM</strong>
+            )}
+            <i className={featuredChannel?.live ? "live" : ""}>{featuredChannel?.live ? "● EN VIVO" : "OFFLINE"}</i>
+          </div>
+
+          <div className="featuredBody">
+            <span className="featuredTag">CANAL PRINCIPAL</span>
+            <h3>SoyelMoro</h3>
+            <p>@soyelmoro</p>
+            <div className="featuredMeta">
+              <strong>{featuredChannel?.live ? (featuredChannel.title || "Transmitiendo ahora") : "Streamer destacado de Legión de Streamers"}</strong>
+              <span>{featuredChannel?.live ? `${featuredChannel.category || "Gaming"} • ${featuredChannel.viewers || 0} viewers` : "Retos • juegos • charlas • comunidad"}</span>
+            </div>
+            <a href={MAIN_KICK_URL} target="_blank" rel="noreferrer">Ver canal destacado en KICK ↗</a>
+          </div>
+        </article>
       </section>
 
       <section id="directorio" className="dir">
