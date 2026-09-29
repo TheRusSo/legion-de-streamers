@@ -1,0 +1,1 @@
+Brand PNG is managed as a binary Git blob. Do not replace with text.
