@@ -4,6 +4,9 @@ import { cleanKickSlug, extractKickSlugs } from "@/lib/kick";
 
 export const dynamic = "force-dynamic";
 
+const DELETE_MARKER_PREFIX = "deleted_";
+const MAX_SLUG_LENGTH = 80;
+
 type ChannelRow = {
   slug: string;
   created_at?: string;
@@ -73,8 +76,51 @@ function isLegacyUserIdError(error: unknown) {
   return text.includes("user_id") || text.includes("null value in column");
 }
 
+function cleanStoredSlug(value: string) {
+  return cleanKickSlug(String(value || ""))
+    .toLowerCase()
+    .slice(0, MAX_SLUG_LENGTH);
+}
+
 function unique(values: string[]) {
-  return [...new Set(values.filter(Boolean).map((value) => value.toLowerCase()))];
+  return [...new Set(values.map(cleanStoredSlug).filter(Boolean))];
+}
+
+function deletionMarkerFor(slug: string) {
+  return `${DELETE_MARKER_PREFIX}${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
+}
+
+function isDeletionMarker(slug: string) {
+  return cleanStoredSlug(slug).startsWith(DELETE_MARKER_PREFIX);
+}
+
+function deletionTargetFromMarker(slug: string) {
+  const clean = cleanStoredSlug(slug);
+  if (!isDeletionMarker(clean)) return "";
+  return clean.slice(DELETE_MARKER_PREFIX.length);
+}
+
+function splitVisibleRows(rows: ChannelRow[]) {
+  const deleted = new Set<string>();
+  const visibleRows: ChannelRow[] = [];
+
+  for (const row of rows) {
+    const slug = cleanStoredSlug(row.slug);
+    if (!slug) continue;
+
+    if (isDeletionMarker(slug)) {
+      const target = deletionTargetFromMarker(slug);
+      if (target) deleted.add(target);
+      continue;
+    }
+
+    visibleRows.push({ slug, created_at: row.created_at });
+  }
+
+  return {
+    deleted,
+    visibleRows: visibleRows.filter((row) => !deleted.has(row.slug.toLowerCase()))
+  };
 }
 
 function parseBodySlugs(body: Record<string, unknown>) {
@@ -93,12 +139,12 @@ async function readBody(req: NextRequest) {
 
 function cleanRow(row: ChannelRow): ChannelRow {
   return {
-    slug: cleanKickSlug(row.slug),
+    slug: cleanStoredSlug(row.slug),
     created_at: row.created_at
   };
 }
 
-async function readAdminRows() {
+async function readRawRows() {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("channels")
@@ -110,6 +156,11 @@ async function readAdminRows() {
   return ((data || []) as ChannelRow[])
     .map(cleanRow)
     .filter((row) => row.slug);
+}
+
+async function readAdminRows() {
+  const { visibleRows } = splitVisibleRows(await readRawRows());
+  return visibleRows;
 }
 
 async function slugExists(slug: string) {
@@ -126,6 +177,9 @@ async function findExistingChannels(slugs: string[]) {
 async function insertRows(slugs: string[]) {
   const supabase = getSupabaseAdmin();
   const rows = unique(slugs).map((slug) => ({ slug }));
+
+  if (!rows.length) return;
+
   const first = await supabase.from("channels").insert(rows);
 
   if (!first.error) return;
@@ -138,9 +192,42 @@ async function insertRows(slugs: string[]) {
   if (second.error) throw second.error;
 }
 
+async function removeDeletionMarker(slug: string) {
+  const supabase = getSupabaseAdmin();
+  const marker = deletionMarkerFor(slug);
+
+  const result = await supabase
+    .from("channels")
+    .delete()
+    .eq("slug", marker);
+
+  if (result.error) {
+    // Si la key de Vercel es anon y no service_role, Supabase puede bloquear DELETE.
+    // No detenemos la acción: los INSERT siguen funcionando por la policy pública.
+    return false;
+  }
+
+  return true;
+}
+
+async function recordDeletedSlug(slug: string) {
+  const marker = deletionMarkerFor(slug);
+
+  try {
+    await insertRows([marker]);
+    return true;
+  } catch (error) {
+    if (isDuplicateError(error)) return true;
+    throw error;
+  }
+}
+
 async function addChannels(slugs: string[]): Promise<AddResult> {
-  const cleanSlugs = unique(slugs);
+  const cleanSlugs = unique(slugs).filter((slug) => !isDeletionMarker(slug));
   if (!cleanSlugs.length) return { added: [], duplicates: [] };
+
+  // Si un canal fue eliminado antes, intentamos desbloquearlo antes de agregarlo otra vez.
+  await Promise.all(cleanSlugs.map((slug) => removeDeletionMarker(slug)));
 
   const existing = await findExistingChannels(cleanSlugs);
   const duplicates = cleanSlugs.filter((slug) => existing.has(slug));
@@ -148,23 +235,42 @@ async function addChannels(slugs: string[]): Promise<AddResult> {
 
   if (!toAdd.length) return { added: [], duplicates };
 
-  await insertRows(toAdd);
-  return { added: toAdd, duplicates };
+  try {
+    await insertRows(toAdd);
+    return { added: toAdd, duplicates };
+  } catch (error) {
+    if (isDuplicateError(error)) {
+      const visible = await findExistingChannels(cleanSlugs);
+      return {
+        added: cleanSlugs.filter((slug) => visible.has(slug) && !existing.has(slug)),
+        duplicates: cleanSlugs.filter((slug) => visible.has(slug) && existing.has(slug))
+      };
+    }
+
+    throw error;
+  }
 }
 
 async function deleteSlug(slug: string) {
   const supabase = getSupabaseAdmin();
 
-  // Use ilike to avoid problems if an old row was saved with different casing.
+  // Paso 1: crear una marca persistente de eliminación. Esto funciona incluso si la key es anon,
+  // porque la tabla permite INSERT público. La página pública filtrará este canal por esa marca.
+  await recordDeletedSlug(slug);
+
+  // Paso 2: intentar borrar la fila real. Si la key no es service_role, Supabase puede bloquearlo.
+  // La marca anterior evita que el canal reaparezca aunque la fila real siga existiendo.
   const first = await supabase
     .from("channels")
     .delete()
     .ilike("slug", slug);
 
-  if (first.error) throw first.error;
+  if (first.error) {
+    return false;
+  }
 
-  const stillExists = await slugExists(slug);
-  return !stillExists;
+  const stillVisible = await slugExists(slug);
+  return !stillVisible;
 }
 
 async function updateSlug(oldSlug: string, newSlug: string) {
@@ -180,19 +286,26 @@ async function updateSlug(oldSlug: string, newSlug: string) {
     return { ok: false as const, code: "duplicate" as const };
   }
 
+  await removeDeletionMarker(newSlug);
+
   const update = await supabase
     .from("channels")
     .update({ slug: newSlug })
     .ilike("slug", oldSlug);
 
-  if (update.error) throw update.error;
+  if (update.error) {
+    // Fallback para cuando UPDATE está bloqueado por RLS: inserta el nuevo y marca el anterior como eliminado.
+    await insertRows([newSlug]);
+    await deleteSlug(oldSlug);
+    return { ok: true as const, mode: "recreated" as const };
+  }
 
   const changed = await slugExists(newSlug);
   if (changed) {
+    await recordDeletedSlug(oldSlug);
     return { ok: true as const, mode: "updated" as const };
   }
 
-  // Fallback: if PostgREST update did not modify the row, create the new row and delete the old one.
   await insertRows([newSlug]);
   await deleteSlug(oldSlug);
 
@@ -270,8 +383,8 @@ export async function PATCH(req: NextRequest) {
   if (blocked) return blocked;
 
   const body = await readBody(req);
-  const oldSlug = cleanKickSlug(String(body.oldSlug || body.slug || ""));
-  const newSlug = cleanKickSlug(String(body.newSlug || body.newUrl || body.channel || ""));
+  const oldSlug = cleanStoredSlug(String(body.oldSlug || body.slug || ""));
+  const newSlug = cleanStoredSlug(String(body.newSlug || body.newUrl || body.channel || ""));
 
   if (!oldSlug || !newSlug) {
     return NextResponse.json(
@@ -333,7 +446,7 @@ export async function DELETE(req: NextRequest) {
 
   const url = new URL(req.url);
   const body = await readBody(req);
-  const slug = cleanKickSlug(url.searchParams.get("slug") || String(body.slug || body.channel || ""));
+  const slug = cleanStoredSlug(url.searchParams.get("slug") || String(body.slug || body.channel || ""));
 
   if (!slug) {
     return NextResponse.json(
@@ -344,12 +457,13 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const removed = await deleteSlug(slug);
-    const channels = (await readAdminRows()).filter((channel) => channel.slug.toLowerCase() !== slug.toLowerCase());
+    const channels = await readAdminRows();
 
     return NextResponse.json({
       ok: true,
       deleted: slug,
-      alreadyDeleted: !removed,
+      hiddenByMarker: true,
+      physicalDelete: removed,
       total: channels.length,
       channels
     });
