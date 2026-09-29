@@ -73,6 +73,14 @@ function initials(value: string) {
     .toUpperCase() || "K";
 }
 
+function originalCover(channel?: Channel) {
+  return channel?.thumbnail || channel?.banner || channel?.avatar || "";
+}
+
+function originalAvatar(channel?: Channel) {
+  return channel?.avatar || channel?.thumbnail || channel?.banner || "";
+}
+
 async function readApiResult(res: Response): Promise<ApiResult> {
   const text = await res.text();
   if (!text) return {};
@@ -194,6 +202,8 @@ export default function Page() {
 
   const liveCount = channels.filter((channel) => channel.live).length;
   const featuredChannel = channels.find((channel) => channel.slug.toLowerCase() === MAIN_CHANNEL);
+  const featuredCoverImage = originalCover(featuredChannel);
+  const featuredAvatarImage = originalAvatar(featuredChannel);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -263,10 +273,10 @@ export default function Page() {
         <article className="featuredCard">
           <div
             className="featuredCover"
-            style={featuredChannel?.thumbnail ? { backgroundImage: `linear-gradient(#09070d99,#09070ddd), url(${featuredChannel.thumbnail})` } : undefined}
+            style={featuredCoverImage ? { backgroundImage: `linear-gradient(#09070d88,#09070dde), url(${featuredCoverImage})` } : undefined}
           >
-            {featuredChannel?.avatar ? (
-              <img src={featuredChannel.avatar} alt="SoyelMoro" />
+            {featuredAvatarImage ? (
+              <img src={featuredAvatarImage} alt="Foto original del canal SoyelMoro" />
             ) : (
               <strong>SM</strong>
             )}
@@ -316,36 +326,41 @@ export default function Page() {
         ) : (
           <>
             <div className="grid">
-              {filtered.map((channel) => (
-                <article key={channel.slug} className={channel.live ? "isLive" : ""}>
-                  <div
-                    className="cover"
-                    style={channel.thumbnail ? { backgroundImage: `linear-gradient(#09070daa,#09070dcc), url(${channel.thumbnail})` } : undefined}
-                  >
-                    {channel.avatar ? (
-                      <img className="avatarImg" src={channel.avatar} alt={channel.name} />
-                    ) : (
-                      <div className="avatar">{initials(channel.name || channel.slug)}</div>
-                    )}
-                    <i className={channel.live ? "live" : ""}>{channel.live ? "● EN VIVO" : "OFFLINE"}</i>
-                  </div>
-                  <div className="body">
-                    <h3>{channel.name || channel.slug}</h3>
-                    <p>@{channel.slug}</p>
-                    <div className="profileInfo">
-                      {channel.live ? (
-                        <>
-                          <strong>{channel.title || "Transmitiendo ahora"}</strong>
-                          <span>{channel.category || "Sin categoría"} • {channel.viewers || 0} viewers</span>
-                        </>
+              {filtered.map((channel) => {
+                const coverImage = originalCover(channel);
+                const avatarImage = originalAvatar(channel);
+
+                return (
+                  <article key={channel.slug} className={channel.live ? "isLive" : ""}>
+                    <div
+                      className="cover"
+                      style={coverImage ? { backgroundImage: `linear-gradient(#09070daa,#09070dcc), url(${coverImage})` } : undefined}
+                    >
+                      {avatarImage ? (
+                        <img className="avatarImg" src={avatarImage} alt={`Foto original de ${channel.name || channel.slug}`} />
                       ) : (
-                        <span>{channel.followers ? `${channel.followers} seguidores` : "Perfil de KICK"}</span>
+                        <div className="avatar">{initials(channel.name || channel.slug)}</div>
                       )}
+                      <i className={channel.live ? "live" : ""}>{channel.live ? "● EN VIVO" : "OFFLINE"}</i>
                     </div>
-                    <a href={channel.url} target="_blank" rel="noreferrer">VER CANAL EN KICK ↗</a>
-                  </div>
-                </article>
-              ))}
+                    <div className="body">
+                      <h3>{channel.name || channel.slug}</h3>
+                      <p>@{channel.slug}</p>
+                      <div className="profileInfo">
+                        {channel.live ? (
+                          <>
+                            <strong>{channel.title || "Transmitiendo ahora"}</strong>
+                            <span>{channel.category || "Sin categoría"} • {channel.viewers || 0} viewers</span>
+                          </>
+                        ) : (
+                          <span>{channel.followers ? `${channel.followers} seguidores` : "Perfil de KICK"}</span>
+                        )}
+                      </div>
+                      <a href={channel.url} target="_blank" rel="noreferrer">VER CANAL EN KICK ↗</a>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
             {!filtered.length && <div className="empty">No hay canales en esta sección.</div>}
           </>
