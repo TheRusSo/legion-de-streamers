@@ -9,6 +9,12 @@ type ChannelRow = {
   created_at: string;
 };
 
+const STARTER_CHANNELS = ["soyelmoro"];
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
 function offlineFallback(row: ChannelRow) {
   return {
     slug: row.slug,
@@ -25,6 +31,10 @@ function offlineFallback(row: ChannelRow) {
   };
 }
 
+function kickIsConfigured() {
+  return Boolean(process.env.KICK_CLIENT_ID && process.env.KICK_CLIENT_SECRET);
+}
+
 export async function GET() {
   try {
     const supabase = getSupabaseAdmin();
@@ -35,8 +45,27 @@ export async function GET() {
 
     if (error) throw error;
 
-    const rows = (data || []) as ChannelRow[];
-    const kickMap = await fetchKickChannels(rows.map((r) => r.slug));
+    let rows = (data || []) as ChannelRow[];
+
+    if (rows.length === 0) {
+      await supabase
+        .from("channels")
+        .upsert(STARTER_CHANNELS.map((slug) => ({ slug })), { onConflict: "slug" });
+
+      rows = STARTER_CHANNELS.map((slug) => ({ slug, created_at: nowIso() }));
+    }
+
+    let kickMap = new Map();
+    let kickStatus = "not_configured";
+
+    if (kickIsConfigured()) {
+      try {
+        kickMap = await fetchKickChannels(rows.map((r) => r.slug));
+        kickStatus = "ok";
+      } catch {
+        kickStatus = "error";
+      }
+    }
 
     const channels = rows.map((row) => {
       const kick = kickMap.get(row.slug.toLowerCase());
@@ -67,8 +96,9 @@ export async function GET() {
       channels,
       configured: {
         supabase: true,
-        kick: Boolean(process.env.KICK_CLIENT_ID && process.env.KICK_CLIENT_SECRET)
-      }
+        kick: kickIsConfigured()
+      },
+      kick_status: kickStatus
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error desconocido.";
