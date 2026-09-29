@@ -22,6 +22,7 @@ type ApiResult = {
 };
 
 const STORAGE_KEY = "legion_admin_password";
+const PUBLIC_LOCAL_CHANNELS_KEY = "legion_streamers_local_channels";
 
 function formatDate(value?: string) {
   if (!value) return "—";
@@ -35,8 +36,63 @@ function formatDate(value?: string) {
   }
 }
 
+function cleanAdminSlug(value: string) {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  const match = raw.match(/(?:https?:\/\/)?(?:www\.)?kick\.com\/([^/?#\s]+)/i);
+
+  return (match?.[1] || raw.replace(/^@/, ""))
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .slice(0, 80);
+}
+
+function extractAdminSlugs(input: string) {
+  return [...new Set(
+    String(input || "")
+      .replace(/\r/g, "\n")
+      .replace(/,/g, "\n")
+      .replace(/;/g, "\n")
+      .split(/\s+/)
+      .map(cleanAdminSlug)
+      .filter(Boolean)
+  )];
+}
+
 function normalizeAdminInput(value: string) {
-  return value.trim().replace(/^@/, "").replace(/^https?:\/\/(www\.)?kick\.com\//i, "");
+  return cleanAdminSlug(value);
+}
+
+function getPublicLocalSlugs() {
+  if (typeof window === "undefined") return [] as string[];
+
+  try {
+    return extractAdminSlugs(window.localStorage.getItem(PUBLIC_LOCAL_CHANNELS_KEY) || "");
+  } catch {
+    return [] as string[];
+  }
+}
+
+function savePublicLocalSlugs(slugs: string[]) {
+  if (typeof window === "undefined") return;
+
+  try {
+    const clean = [...new Set(slugs.map(cleanAdminSlug).filter(Boolean))];
+    if (clean.length) {
+      window.localStorage.setItem(PUBLIC_LOCAL_CHANNELS_KEY, clean.join("\n"));
+    } else {
+      window.localStorage.removeItem(PUBLIC_LOCAL_CHANNELS_KEY);
+    }
+  } catch {
+    // localStorage puede estar bloqueado por el navegador.
+  }
+}
+
+function removePublicLocalSlugs(slugs: string[]) {
+  const removed = new Set(slugs.map(cleanAdminSlug).filter(Boolean));
+  if (!removed.size) return;
+
+  const remaining = getPublicLocalSlugs().filter((slug) => !removed.has(slug));
+  savePublicLocalSlugs(remaining);
 }
 
 function formatSlugList(values: string[]) {
@@ -225,6 +281,7 @@ export default function AdminPage() {
         body: JSON.stringify({ oldSlug, newSlug })
       });
 
+      removePublicLocalSlugs([oldSlug]);
       setNotice(`Actualizado: @${oldSlug} → @${newSlug}. Cambio aplicado en la página pública.`);
       setEdits((current) => ({ ...current, [oldSlug]: "" }));
       if (!data.channels) await loadChannels();
@@ -247,7 +304,9 @@ export default function AdminPage() {
         method: "DELETE"
       });
 
-      // Fuerza la salida visual inmediata del panel aunque Supabase tarde unos segundos en reflejar la lectura.
+      // Borra también cualquier copia local usada por la página pública en este navegador.
+      // Esto evita que un canal eliminado en Supabase vuelva a salir por el fallback local.
+      removePublicLocalSlugs([slug]);
       removeChannelFromPanel(slug);
       setNotice(`Eliminado: @${slug}. Ya no aparecerá en la página pública.`);
     } catch (err) {
