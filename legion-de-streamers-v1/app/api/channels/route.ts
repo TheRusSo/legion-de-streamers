@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseAdmin, getSupabaseReadClient } from "@/lib/supabase";
+import { getSupabasePublicWriteClient, getSupabaseReadClient } from "@/lib/supabase";
 import {
   extractKickSlugs,
   fallbackKickChannel,
@@ -69,7 +69,7 @@ async function readRowsFromSupabase() {
 async function findExistingChannels(slugs: string[]) {
   if (!slugs.length) return new Set<string>();
 
-  const supabase = getSupabaseAdmin();
+  const supabase = getSupabaseReadClient();
   const { data, error } = await supabase
     .from("channels")
     .select("slug")
@@ -80,7 +80,7 @@ async function findExistingChannels(slugs: string[]) {
 }
 
 async function insertRows(slugs: string[]) {
-  const supabase = getSupabaseAdmin();
+  const supabase = getSupabasePublicWriteClient();
   const simpleRows = slugs.map((slug) => ({ slug }));
   const first = await supabase.from("channels").insert(simpleRows);
 
