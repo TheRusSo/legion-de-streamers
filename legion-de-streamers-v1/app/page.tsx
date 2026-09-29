@@ -8,10 +8,14 @@ type Channel = {
   url: string;
   live: boolean;
   title?: string;
+  description?: string;
   category?: string;
   viewers?: number;
   thumbnail?: string;
+  avatar?: string;
   banner?: string;
+  followers?: number;
+  source?: string;
 };
 
 function initials(value: string) {
@@ -33,7 +37,7 @@ export default function Page() {
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [message, setMessage] = useState("");
-  const [kickConfigured, setKickConfigured] = useState(false);
+  const [profileStatus, setProfileStatus] = useState("Actualizando perfiles cada 30 segundos.");
 
   async function loadChannels() {
     try {
@@ -45,7 +49,11 @@ export default function Page() {
       }
 
       setChannels(data.channels || []);
-      setKickConfigured(Boolean(data.configured?.kick));
+      setProfileStatus(
+        data.kick_status === "error"
+          ? "Canales guardados. KICK no respondió en esta actualización; se intentará otra vez automáticamente."
+          : "Perfiles y estado EN VIVO se actualizan automáticamente cada 30 segundos."
+      );
     } catch (error) {
       const text = error instanceof Error ? error.message : "Error desconocido.";
       setMessage(text);
@@ -73,7 +81,7 @@ export default function Page() {
     try {
       const res = await fetch("/api/channels", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channel: input })
       });
 
@@ -84,9 +92,9 @@ export default function Page() {
       }
 
       setInput("");
-      setMessage("Canal añadido correctamente.");
+      setMessage("Canal añadido correctamente. Cargando perfil de KICK...");
       await loadChannels();
-      setTimeout(() => setMessage(""), 2500);
+      setTimeout(() => setMessage(""), 3000);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Error desconocido.");
     } finally {
@@ -125,7 +133,7 @@ export default function Page() {
         <label>COMUNIDAD • KICK • CREADORES</label>
         <h1>Tu comunidad.<br /><em>En vivo y conectada.</em></h1>
         <p>
-          Añade tu canal de KICK, descubre nuevos creadores y apoya a los miembros de Legión de Streamers.
+          Añade enlaces ilimitados de KICK. La página carga el perfil de cada canal y actualiza su estado automáticamente.
         </p>
 
         <form onSubmit={addChannel}>
@@ -138,11 +146,7 @@ export default function Page() {
         </form>
 
         {message && <div className="msg">{message}</div>}
-        {!kickConfigured && !loading && (
-          <div className="warn">
-            La página ya guarda canales. Para activar EN VIVO automático faltan las variables de KICK.
-          </div>
-        )}
+        {!loading && <div className="warn">{profileStatus}</div>}
 
         <div className="stats">
           <div><strong>{channels.length}</strong><small>MIEMBROS</small></div>
@@ -187,18 +191,22 @@ export default function Page() {
                     className="cover"
                     style={channel.thumbnail ? { backgroundImage: `linear-gradient(#09070daa,#09070dcc), url(${channel.thumbnail})` } : undefined}
                   >
-                    <div className="avatar">{initials(channel.name)}</div>
+                    <div className="avatar">
+                      {channel.avatar ? <img src={channel.avatar} alt={channel.name} /> : initials(channel.name)}
+                    </div>
                     <i className={channel.live ? "live" : ""}>{channel.live ? "● EN VIVO" : "OFFLINE"}</i>
                   </div>
                   <div className="body">
                     <h3>{channel.name}</h3>
                     <p>@{channel.slug}</p>
-                    {channel.live && (
-                      <div className="meta">
-                        <strong>{channel.title || "Transmitiendo ahora"}</strong>
-                        <span>{channel.category || "Sin categoría"} • {channel.viewers || 0} viewers</span>
-                      </div>
-                    )}
+                    <div className="meta">
+                      <strong>{channel.live ? (channel.title || "Transmitiendo ahora") : "Perfil de KICK conectado"}</strong>
+                      <span>
+                        {channel.live
+                          ? `${channel.category || "Sin categoría"} • ${channel.viewers || 0} viewers`
+                          : `${channel.followers || 0} seguidores • Estado actualizado`}
+                      </span>
+                    </div>
                     <a href={channel.url} target="_blank" rel="noreferrer">VER CANAL EN KICK ↗</a>
                   </div>
                 </article>
