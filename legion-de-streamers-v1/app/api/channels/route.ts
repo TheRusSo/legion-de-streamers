@@ -9,6 +9,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const FEATURED_CHANNEL = "soyelmoro";
+
 type ChannelRow = {
   slug: string;
   created_at: string;
@@ -195,6 +197,7 @@ function parseExtraSlugs(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   const extraRows = rowsFromSlugs(parseExtraSlugs(req));
+  const featuredRows = rowsFromSlugs([FEATURED_CHANNEL]);
   let rows: ChannelRow[] = [];
   let storageWarning = "";
   let storage = "supabase";
@@ -206,7 +209,9 @@ export async function GET(req: NextRequest) {
     storageWarning = getErrorMessage(error);
   }
 
-  const finalRows = mergeRows(rows, extraRows);
+  // El canal destacado siempre se hidrata con datos reales de KICK,
+  // aunque todavía no esté guardado en Supabase. Así se visualiza su foto/banner.
+  const finalRows = mergeRows(rows, [...featuredRows, ...extraRows]);
   const { channels, kickStatus } = await hydrateRows(finalRows);
 
   return NextResponse.json({
