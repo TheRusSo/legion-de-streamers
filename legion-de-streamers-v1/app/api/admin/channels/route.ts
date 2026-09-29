@@ -9,6 +9,11 @@ type ChannelRow = {
   created_at?: string;
 };
 
+type AddResult = {
+  added: string[];
+  duplicates: string[];
+};
+
 function getAdminSecret() {
   return (process.env.ADMIN_PASSWORD || process.env.ADMIN_TOKEN || "").trim();
 }
@@ -68,6 +73,10 @@ function isLegacyUserIdError(error: unknown) {
   return text.includes("user_id") || text.includes("null value in column");
 }
 
+function unique(values: string[]) {
+  return [...new Set(values.filter(Boolean).map((value) => value.toLowerCase()))];
+}
+
 function parseBodySlugs(body: Record<string, unknown>) {
   const values = [body.channels, body.slug, body.url, body.channel, body.text]
     .flatMap((value) => Array.isArray(value) ? value : [value])
@@ -82,27 +91,75 @@ async function readBody(req: NextRequest) {
   return await req.json().catch(() => ({} as Record<string, unknown>));
 }
 
+async function readAdminRows() {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("channels")
+    .select("slug, created_at")
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+  return (data || []) as ChannelRow[];
+}
+
+async function findExistingChannels(slugs: string[]) {
+  if (!slugs.length) return new Set<string>();
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("channels")
+    .select("slug")
+    .in("slug", slugs);
+
+  if (error) throw error;
+  return new Set((data || []).map((row: { slug: string }) => row.slug.toLowerCase()));
+}
+
+async function insertRows(slugs: string[]) {
+  const supabase = getSupabaseAdmin();
+  const rows = slugs.map((slug) => ({ slug }));
+  const first = await supabase.from("channels").insert(rows);
+
+  if (!first.error) return;
+  if (isDuplicateError(first.error)) throw first.error;
+  if (!isLegacyUserIdError(first.error)) throw first.error;
+
+  const legacyRows = slugs.map((slug) => ({ slug, user_id: 0 }));
+  const second = await supabase.from("channels").insert(legacyRows);
+
+  if (second.error) throw second.error;
+}
+
+async function addChannels(slugs: string[]): Promise<AddResult> {
+  const cleanSlugs = unique(slugs);
+  if (!cleanSlugs.length) return { added: [], duplicates: [] };
+
+  const existing = await findExistingChannels(cleanSlugs);
+  const duplicates = cleanSlugs.filter((slug) => existing.has(slug));
+  const toAdd = cleanSlugs.filter((slug) => !existing.has(slug));
+
+  if (!toAdd.length) return { added: [], duplicates };
+
+  await insertRows(toAdd);
+  return { added: toAdd, duplicates };
+}
+
 export async function GET(req: NextRequest) {
   const blocked = adminGuard(req);
   if (blocked) return blocked;
 
   try {
-    const supabase = getSupabaseAdmin();
-    const { data, error } = await supabase
-      .from("channels")
-      .select("slug, created_at")
-      .order("created_at", { ascending: false });
-
-    if (error) throw error;
+    const channels = await readAdminRows();
 
     return NextResponse.json({
       ok: true,
-      channels: (data || []) as ChannelRow[],
-      total: data?.length || 0
+      channels,
+      total: channels.length,
+      source: "supabase"
     });
   } catch (error) {
     return NextResponse.json(
-      { ok: false, error: getErrorMessage(error) },
+      { ok: false, code: "storage_error", error: getErrorMessage(error) },
       { status: 500 }
     );
   }
@@ -123,39 +180,24 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const supabase = getSupabaseAdmin();
-    const rows = slugs.map((slug) => ({ slug }));
-    const first = await supabase.from("channels").insert(rows);
+    const result = await addChannels(slugs);
+    const channels = await readAdminRows();
 
-    if (!first.error) {
-      return NextResponse.json({ ok: true, added: slugs, permanent: true });
-    }
-
-    if (isDuplicateError(first.error)) {
-      return NextResponse.json(
-        { ok: false, code: "duplicate", error: "Uno o más canales ya existen." },
-        { status: 409 }
-      );
-    }
-
-    if (!isLegacyUserIdError(first.error)) throw first.error;
-
-    const legacyRows = slugs.map((slug) => ({ slug, user_id: 0 }));
-    const second = await supabase.from("channels").insert(legacyRows);
-
-    if (!second.error) {
-      return NextResponse.json({ ok: true, added: slugs, permanent: true });
-    }
-
-    if (isDuplicateError(second.error)) {
-      return NextResponse.json(
-        { ok: false, code: "duplicate", error: "Uno o más canales ya existen." },
-        { status: 409 }
-      );
-    }
-
-    throw second.error;
+    return NextResponse.json({
+      ok: true,
+      ...result,
+      permanent: true,
+      total: channels.length,
+      channels
+    });
   } catch (error) {
+    if (isDuplicateError(error)) {
+      return NextResponse.json(
+        { ok: false, code: "duplicate", error: "Uno o más canales ya existen." },
+        { status: 409 }
+      );
+    }
+
     return NextResponse.json(
       { ok: false, code: "storage_not_persistent", error: getErrorMessage(error) },
       { status: 500 }
@@ -184,10 +226,12 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const supabase = getSupabaseAdmin();
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("channels")
       .update({ slug: newSlug })
-      .eq("slug", oldSlug);
+      .eq("slug", oldSlug)
+      .select("slug, created_at")
+      .maybeSingle();
 
     if (error) {
       if (isDuplicateError(error)) {
@@ -200,10 +244,25 @@ export async function PATCH(req: NextRequest) {
       throw error;
     }
 
-    return NextResponse.json({ ok: true, updated: { oldSlug, newSlug } });
+    if (!data) {
+      return NextResponse.json(
+        { ok: false, code: "not_found", error: `El canal @${oldSlug} no existe en la base de datos.` },
+        { status: 404 }
+      );
+    }
+
+    const channels = await readAdminRows();
+
+    return NextResponse.json({
+      ok: true,
+      updated: { oldSlug, newSlug },
+      row: data,
+      total: channels.length,
+      channels
+    });
   } catch (error) {
     return NextResponse.json(
-      { ok: false, error: getErrorMessage(error) },
+      { ok: false, code: "storage_error", error: getErrorMessage(error) },
       { status: 500 }
     );
   }
@@ -226,14 +285,33 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const supabase = getSupabaseAdmin();
-    const { error } = await supabase.from("channels").delete().eq("slug", slug);
+    const { data, error } = await supabase
+      .from("channels")
+      .delete()
+      .eq("slug", slug)
+      .select("slug")
+      .maybeSingle();
 
     if (error) throw error;
 
-    return NextResponse.json({ ok: true, deleted: slug });
+    if (!data) {
+      return NextResponse.json(
+        { ok: false, code: "not_found", error: `El canal @${slug} no existe en la base de datos.` },
+        { status: 404 }
+      );
+    }
+
+    const channels = await readAdminRows();
+
+    return NextResponse.json({
+      ok: true,
+      deleted: slug,
+      total: channels.length,
+      channels
+    });
   } catch (error) {
     return NextResponse.json(
-      { ok: false, error: getErrorMessage(error) },
+      { ok: false, code: "storage_error", error: getErrorMessage(error) },
       { status: 500 }
     );
   }
