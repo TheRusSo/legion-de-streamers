@@ -1,11 +1,11 @@
-/* Branding final aprobado: usa el escudo LS y las letras originales enviadas por el usuario.
-   No toca la lógica de KICK, canales, API ni Supabase. */
+/* Branding final: escudo LS + letras Legión de Streamers.
+   Este archivo solo afecta el header visual; no toca KICK, API, canales ni Supabase. */
 .brand{
   width:min(430px,50vw)!important;
   height:86px!important;
   flex:0 0 auto!important;
   display:block!important;
-  background-image:url("/brand-lockup.svg")!important;
+  background-image:url("/brand-lockup.svg?v=5")!important;
   background-position:left center!important;
   background-repeat:no-repeat!important;
   background-size:contain!important;
