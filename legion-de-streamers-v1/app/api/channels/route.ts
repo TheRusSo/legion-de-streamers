@@ -47,6 +47,25 @@ function unique(values: string[]) {
   return [...new Set(values.filter(Boolean).map((value) => value.toLowerCase()))];
 }
 
+function rowsFromSlugs(slugs: string[]) {
+  const timestamp = nowIso();
+  return unique(slugs).map((slug) => ({ slug, created_at: timestamp }));
+}
+
+function mergeRows(primaryRows: ChannelRow[], extraRows: ChannelRow[]) {
+  const seen = new Set<string>();
+  const merged: ChannelRow[] = [];
+
+  for (const row of [...primaryRows, ...extraRows]) {
+    const slug = row.slug.toLowerCase();
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    merged.push({ slug, created_at: row.created_at });
+  }
+
+  return merged.sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
 function offlineRow(row: ChannelRow) {
   return {
     ...fallbackKickChannel(row.slug),
@@ -169,36 +188,40 @@ function parseRequestSlugs(body: Record<string, unknown>) {
   return extractKickSlugs(text);
 }
 
-export async function GET() {
-  try {
-    const rows = await readRowsFromSupabase();
-    const { channels, kickStatus } = await hydrateRows(rows);
+function parseExtraSlugs(req: NextRequest) {
+  const url = new URL(req.url);
+  return extractKickSlugs(url.searchParams.get("extra") || "");
+}
 
-    return NextResponse.json({
-      ok: true,
-      channels,
-      configured: { supabase: true, kick: kickStatus === "ok" },
-      storage: "supabase",
-      permanent: true,
-      kick_status: kickStatus,
-      total: channels.length
-    });
+export async function GET(req: NextRequest) {
+  const extraRows = rowsFromSlugs(parseExtraSlugs(req));
+  let rows: ChannelRow[] = [];
+  let storageWarning = "";
+  let storage = "supabase";
+
+  try {
+    rows = await readRowsFromSupabase();
   } catch (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        channels: [],
-        configured: { supabase: false, kick: false },
-        storage: "supabase",
-        permanent: false,
-        code: "storage_error",
-        error: "No se pudieron cargar los canales guardados. Revisa las variables de Supabase en Vercel y la tabla public.channels.",
-        storage_warning: getErrorMessage(error),
-        total: 0
-      },
-      { status: 500 }
-    );
+    storage = "local_fallback";
+    storageWarning = getErrorMessage(error);
   }
+
+  const finalRows = mergeRows(rows, extraRows);
+  const { channels, kickStatus } = await hydrateRows(finalRows);
+
+  return NextResponse.json({
+    ok: true,
+    channels,
+    configured: { supabase: storage === "supabase", kick: kickStatus === "ok" },
+    storage,
+    permanent: storage === "supabase",
+    warning: storageWarning
+      ? `Supabase no respondió correctamente. Mostrando canales locales. Detalle: ${storageWarning}`
+      : "",
+    storage_warning: storageWarning,
+    kick_status: kickStatus,
+    total: channels.length
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -229,16 +252,21 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     const detail = getErrorMessage(error);
-    return NextResponse.json(
-      {
-        ok: false,
-        code: "storage_not_persistent",
-        storage: "supabase",
-        permanent: false,
-        error: `El canal no se guardó en Supabase. Detalle: ${detail}`,
-        supabase_error: detail
-      },
-      { status: 500 }
-    );
+    const added = unique(slugs);
+    const rows = rowsFromSlugs(added);
+    const { channels } = await hydrateRows(rows);
+
+    return NextResponse.json({
+      ok: true,
+      code: "local_fallback",
+      storage: "local_fallback",
+      permanent: false,
+      added,
+      duplicates: [],
+      channels,
+      warning: `Supabase bloqueó el guardado global. El canal se añadirá en este navegador. Detalle: ${detail}`,
+      supabase_error: detail,
+      message: "Canal añadido en modo local. Para guardarlo globalmente hay que corregir las policies RLS de Supabase."
+    });
   }
 }
