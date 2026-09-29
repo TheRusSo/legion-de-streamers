@@ -15,6 +15,16 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Error desconocido.";
+  }
+}
+
 function offlineFallback(row: ChannelRow) {
   return {
     slug: row.slug,
@@ -23,16 +33,38 @@ function offlineFallback(row: ChannelRow) {
     live: false,
     status: "offline",
     title: "",
+    description: "",
     category: "",
     viewers: 0,
     thumbnail: "",
+    avatar: "",
     banner: "",
-    created_at: row.created_at
+    followers: 0,
+    started_at: "",
+    created_at: row.created_at,
+    source: "local"
   };
 }
 
-function kickIsConfigured() {
-  return Boolean(process.env.KICK_CLIENT_ID && process.env.KICK_CLIENT_SECRET);
+async function upsertChannel(supabase: ReturnType<typeof getSupabaseAdmin>, slug: string) {
+  const first = await supabase
+    .from("channels")
+    .upsert({ slug }, { onConflict: "slug" });
+
+  if (!first.error) return;
+
+  const message = first.error.message || "";
+  const needsLegacyUserId =
+    message.toLowerCase().includes("user_id") ||
+    message.toLowerCase().includes("null value in column");
+
+  if (!needsLegacyUserId) throw first.error;
+
+  const second = await supabase
+    .from("channels")
+    .upsert({ slug, user_id: 0 }, { onConflict: "slug" });
+
+  if (second.error) throw second.error;
 }
 
 export async function GET() {
@@ -48,43 +80,25 @@ export async function GET() {
     let rows = (data || []) as ChannelRow[];
 
     if (rows.length === 0) {
-      await supabase
-        .from("channels")
-        .upsert(STARTER_CHANNELS.map((slug) => ({ slug })), { onConflict: "slug" });
-
+      for (const slug of STARTER_CHANNELS) {
+        await upsertChannel(supabase, slug);
+      }
       rows = STARTER_CHANNELS.map((slug) => ({ slug, created_at: nowIso() }));
     }
 
-    let kickMap = new Map();
-    let kickStatus = "not_configured";
-
-    if (kickIsConfigured()) {
-      try {
-        kickMap = await fetchKickChannels(rows.map((r) => r.slug));
-        kickStatus = "ok";
-      } catch {
-        kickStatus = "error";
-      }
-    }
+    let kickStatus = "ok";
+    const kickMap = await fetchKickChannels(rows.map((r) => r.slug)).catch(() => {
+      kickStatus = "error";
+      return new Map();
+    });
 
     const channels = rows.map((row) => {
       const kick = kickMap.get(row.slug.toLowerCase());
       if (!kick) return offlineFallback(row);
 
-      const live = Boolean(kick.stream?.is_live);
       return {
-        slug: kick.slug || row.slug,
-        name: kick.slug || row.slug,
-        url: `https://kick.com/${kick.slug || row.slug}`,
-        live,
-        status: live ? "live" : "offline",
-        title: kick.stream_title || "",
-        description: kick.channel_description || "",
-        category: kick.category?.name || "",
-        viewers: kick.stream?.viewer_count || 0,
-        thumbnail: kick.stream?.thumbnail || kick.category?.thumbnail || "",
-        banner: kick.banner_picture || "",
-        started_at: kick.stream?.start_time || "",
+        ...kick,
+        status: kick.live ? "live" : "offline",
         created_at: row.created_at
       };
     });
@@ -96,13 +110,16 @@ export async function GET() {
       channels,
       configured: {
         supabase: true,
-        kick: kickIsConfigured()
+        kick: true
       },
-      kick_status: kickStatus
+      kick_status: kickStatus,
+      total: channels.length
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Error desconocido.";
-    return NextResponse.json({ ok: false, error: message, channels: [] }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: getErrorMessage(error), channels: [] },
+      { status: 500 }
+    );
   }
 }
 
@@ -116,15 +133,13 @@ export async function POST(req: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
-    const { error } = await supabase
-      .from("channels")
-      .upsert({ slug }, { onConflict: "slug" });
-
-    if (error) throw error;
+    await upsertChannel(supabase, slug);
 
     return NextResponse.json({ ok: true, slug });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Error desconocido.";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: getErrorMessage(error) },
+      { status: 500 }
+    );
   }
 }
