@@ -12,7 +12,7 @@ export type NormalizedKickChannel = {
   banner: string;
   followers: number;
   started_at: string;
-  source: "official" | "public";
+  source: "official" | "public" | "fallback";
 };
 
 type OfficialKickChannel = {
@@ -38,8 +38,8 @@ function envReady() {
 }
 
 export function cleanKickSlug(input: string) {
-  const raw = input.trim().replace(/\/+$/, "");
-  const match = raw.match(/kick\.com\/([^/?#]+)/i);
+  const raw = String(input || "").trim().replace(/\/+$/, "");
+  const match = raw.match(/(?:https?:\/\/)?(?:www\.)?kick\.com\/([^/?#\s]+)/i);
   const slug = (match?.[1] || raw.replace(/^@/, ""))
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "");
@@ -48,8 +48,44 @@ export function cleanKickSlug(input: string) {
   return slug;
 }
 
-function asString(value: unknown) {
-  return typeof value === "string" ? value : "";
+export function extractKickSlugs(input: string) {
+  const text = String(input || "")
+    .replace(/\r/g, "\n")
+    .replace(/,/g, "\n")
+    .replace(/;/g, "\n");
+
+  const parts = text
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const slugs = new Set<string>();
+  for (const part of parts) {
+    const slug = cleanKickSlug(part);
+    if (slug) slugs.add(slug);
+  }
+
+  return [...slugs];
+}
+
+export function fallbackKickChannel(slug: string): NormalizedKickChannel {
+  const cleaned = cleanKickSlug(slug);
+  return {
+    slug: cleaned,
+    name: cleaned,
+    url: `https://kick.com/${cleaned}`,
+    live: false,
+    title: "",
+    description: "",
+    category: "",
+    viewers: 0,
+    thumbnail: "",
+    avatar: "",
+    banner: "",
+    followers: 0,
+    started_at: "",
+    source: "fallback"
+  };
 }
 
 function asNumber(value: unknown) {
@@ -90,9 +126,7 @@ function normalizePublicChannel(data: AnyRecord, requestedSlug: string): Normali
   const user = data.user || {};
   const categories = Array.isArray(livestream?.categories) ? livestream.categories : [];
   const category = categories[0] || livestream?.category || data.category || {};
-  const slug = cleanKickSlug(
-    firstString(data.slug, data.username, user.username, requestedSlug)
-  ) || requestedSlug;
+  const slug = cleanKickSlug(firstString(data.slug, data.username, user.username, requestedSlug)) || requestedSlug;
   const thumbnail = firstString(
     livestream?.thumbnail?.url,
     livestream?.thumbnail,
@@ -106,7 +140,7 @@ function normalizePublicChannel(data: AnyRecord, requestedSlug: string): Normali
     slug,
     name: firstString(user.username, data.username, data.slug, slug),
     url: `https://kick.com/${slug}`,
-    live: Boolean(livestream && (livestream.is_live !== false)),
+    live: Boolean(livestream && livestream.is_live !== false),
     title: firstString(livestream?.session_title, livestream?.title, data.stream_title),
     description: firstString(data.channel_description, data.description),
     category: firstString(category?.name, category?.slug),
@@ -217,22 +251,26 @@ async function fetchPublicChannels(slugs: string[]) {
 
 export async function fetchKickChannels(slugs: string[]) {
   const unique = [...new Set(slugs.map(cleanKickSlug).filter(Boolean))];
-  const officialMap = new Map<string, NormalizedKickChannel>();
+  const finalMap = new Map<string, NormalizedKickChannel>();
 
-  if (!unique.length) return officialMap;
+  if (!unique.length) return finalMap;
 
   try {
     const official = await fetchOfficialBatch(unique);
-    for (const [slug, channel] of official) officialMap.set(slug, channel);
+    for (const [slug, channel] of official) finalMap.set(slug, channel);
   } catch {
-    // If official credentials are missing or fail, continue with the public profile fallback.
+    // Continue with public profile fallback.
   }
 
-  const missing = unique.filter((slug) => !officialMap.has(slug));
+  const missing = unique.filter((slug) => !finalMap.has(slug));
   if (missing.length) {
     const publicMap = await fetchPublicChannels(missing);
-    for (const [slug, channel] of publicMap) officialMap.set(slug, channel);
+    for (const [slug, channel] of publicMap) finalMap.set(slug, channel);
   }
 
-  return officialMap;
+  for (const slug of unique) {
+    if (!finalMap.has(slug)) finalMap.set(slug, fallbackKickChannel(slug));
+  }
+
+  return finalMap;
 }
