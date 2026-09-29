@@ -63,6 +63,11 @@ function isDuplicateError(error: unknown) {
   return text.includes("duplicate") || text.includes("unique") || text.includes("23505") || text.includes("already exists");
 }
 
+function isLegacyUserIdError(error: unknown) {
+  const text = getErrorMessage(error).toLowerCase();
+  return text.includes("user_id") || text.includes("null value in column");
+}
+
 function parseBodySlugs(body: Record<string, unknown>) {
   const values = [body.channels, body.slug, body.url, body.channel, body.text]
     .flatMap((value) => Array.isArray(value) ? value : [value])
@@ -120,23 +125,39 @@ export async function POST(req: NextRequest) {
   try {
     const supabase = getSupabaseAdmin();
     const rows = slugs.map((slug) => ({ slug }));
-    const { error } = await supabase.from("channels").insert(rows);
+    const first = await supabase.from("channels").insert(rows);
 
-    if (error) {
-      if (isDuplicateError(error)) {
-        return NextResponse.json(
-          { ok: false, code: "duplicate", error: "Uno o más canales ya existen." },
-          { status: 409 }
-        );
-      }
-
-      throw error;
+    if (!first.error) {
+      return NextResponse.json({ ok: true, added: slugs, permanent: true });
     }
 
-    return NextResponse.json({ ok: true, added: slugs });
+    if (isDuplicateError(first.error)) {
+      return NextResponse.json(
+        { ok: false, code: "duplicate", error: "Uno o más canales ya existen." },
+        { status: 409 }
+      );
+    }
+
+    if (!isLegacyUserIdError(first.error)) throw first.error;
+
+    const legacyRows = slugs.map((slug) => ({ slug, user_id: 0 }));
+    const second = await supabase.from("channels").insert(legacyRows);
+
+    if (!second.error) {
+      return NextResponse.json({ ok: true, added: slugs, permanent: true });
+    }
+
+    if (isDuplicateError(second.error)) {
+      return NextResponse.json(
+        { ok: false, code: "duplicate", error: "Uno o más canales ya existen." },
+        { status: 409 }
+      );
+    }
+
+    throw second.error;
   } catch (error) {
     return NextResponse.json(
-      { ok: false, error: getErrorMessage(error) },
+      { ok: false, code: "storage_not_persistent", error: getErrorMessage(error) },
       { status: 500 }
     );
   }
