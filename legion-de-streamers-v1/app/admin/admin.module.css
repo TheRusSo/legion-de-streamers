@@ -110,6 +110,11 @@
   cursor:pointer;
   transition:.18s ease;
   white-space:nowrap;
+  text-decoration:none;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font:inherit;
 }
 
 .button{
