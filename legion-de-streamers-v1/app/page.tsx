@@ -18,6 +18,46 @@ type Channel = {
   source?: string;
 };
 
+type ApiResult = {
+  ok?: boolean;
+  error?: string;
+  code?: string;
+  warning?: string;
+  message?: string;
+  added?: string[];
+  duplicates?: string[];
+  channels?: Channel[];
+};
+
+function cleanLocalSlug(input: string) {
+  const raw = String(input || "").trim().replace(/\/+$/, "");
+  const match = raw.match(/(?:https?:\/\/)?(?:www\.)?kick\.com\/([^/?#\s]+)/i);
+  const slug = (match?.[1] || raw.replace(/^@/, ""))
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "");
+
+  if (!slug || slug.length > 80) return "";
+  return slug;
+}
+
+function extractLocalSlugs(input: string) {
+  const parts = String(input || "")
+    .replace(/\r/g, "\n")
+    .replace(/,/g, "\n")
+    .replace(/;/g, "\n")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const slugs = new Set<string>();
+  for (const part of parts) {
+    const slug = cleanLocalSlug(part);
+    if (slug) slugs.add(slug);
+  }
+
+  return [...slugs];
+}
+
 function initials(value: string) {
   return value
     .replace(/[_-]/g, " ")
@@ -29,6 +69,22 @@ function initials(value: string) {
     .toUpperCase() || "K";
 }
 
+async function readApiResult(res: Response): Promise<ApiResult> {
+  const text = await res.text();
+  if (!text) return {};
+
+  try {
+    return JSON.parse(text) as ApiResult;
+  } catch {
+    return { error: text };
+  }
+}
+
+function formatList(values: string[]) {
+  if (!values.length) return "";
+  return values.slice(0, 5).map((v) => `@${v}`).join(", ") + (values.length > 5 ? "..." : "");
+}
+
 export default function Page() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [input, setInput] = useState("");
@@ -37,26 +93,22 @@ export default function Page() {
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [message, setMessage] = useState("");
-  const [profileStatus, setProfileStatus] = useState("Actualizando perfiles cada 30 segundos.");
+  const [systemNotice, setSystemNotice] = useState("");
 
   async function loadChannels() {
     try {
       const res = await fetch("/api/channels", { cache: "no-store" });
-      const data = await res.json();
+      const data = await readApiResult(res);
 
-      if (!res.ok || !data.ok) {
+      if (!res.ok || data.ok === false) {
         throw new Error(data.error || "No se pudo cargar el directorio.");
       }
 
       setChannels(data.channels || []);
-      setProfileStatus(
-        data.kick_status === "error"
-          ? "Canales guardados. KICK no respondió en esta actualización; se intentará otra vez automáticamente."
-          : "Perfiles y estado EN VIVO se actualizan automáticamente cada 30 segundos."
-      );
+      setSystemNotice(data.warning ? `Aviso técnico: ${data.warning}` : "Perfiles y estado EN VIVO se actualizan automáticamente cada 30 segundos.");
     } catch (error) {
       const text = error instanceof Error ? error.message : "Error desconocido.";
-      setMessage(text);
+      setSystemNotice(text);
     } finally {
       setLoading(false);
     }
@@ -70,8 +122,21 @@ export default function Page() {
 
   async function addChannel(e: FormEvent) {
     e.preventDefault();
-    if (!input.trim()) {
-      setMessage("Pega tu enlace o usuario de KICK.");
+
+    const slugs = extractLocalSlugs(input);
+    if (!slugs.length) {
+      setMessage("Pega al menos un enlace o usuario válido de KICK.");
+      return;
+    }
+
+    const existing = new Set(channels.map((channel) => channel.slug.toLowerCase()));
+    const alreadyVisible = slugs.filter((slug) => existing.has(slug));
+    const requestedNew = slugs.filter((slug) => !existing.has(slug));
+
+    if (!requestedNew.length) {
+      setMessage(alreadyVisible.length === 1
+        ? `Ese canal ya está agregado: ${formatList(alreadyVisible)}`
+        : `Esos canales ya están agregados: ${formatList(alreadyVisible)}`);
       return;
     }
 
@@ -82,19 +147,40 @@ export default function Page() {
       const res = await fetch("/api/channels", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel: input })
+        body: JSON.stringify({ channels: requestedNew.join("\n") })
       });
 
-      const data = await res.json();
+      const data = await readApiResult(res);
 
-      if (!res.ok || !data.ok) {
+      if (!res.ok || data.ok === false) {
+        if (data.code === "duplicate" && data.duplicates?.length) {
+          setMessage(`Ya estaba agregado: ${formatList(data.duplicates)}`);
+          await loadChannels();
+          return;
+        }
+
         throw new Error(data.error || "No se pudo añadir el canal.");
       }
 
-      setInput("");
-      setMessage("Canal añadido correctamente. Cargando perfil de KICK...");
+      const added = data.added || [];
+      const duplicates = [...alreadyVisible, ...(data.duplicates || [])];
+
+      if (added.length) {
+        setInput("");
+      }
+
+      if (added.length && duplicates.length) {
+        setMessage(`Añadidos: ${formatList(added)}. Ya existían: ${formatList(duplicates)}.`);
+      } else if (added.length) {
+        setMessage(added.length === 1
+          ? `Canal añadido: ${formatList(added)}`
+          : `Canales añadidos: ${formatList(added)}`);
+      } else {
+        setMessage("No se añadió ningún canal nuevo.");
+      }
+
       await loadChannels();
-      setTimeout(() => setMessage(""), 3000);
+      setTimeout(() => setMessage(""), 4500);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Error desconocido.");
     } finally {
@@ -133,20 +219,22 @@ export default function Page() {
         <label>COMUNIDAD • KICK • CREADORES</label>
         <h1>Tu comunidad.<br /><em>En vivo y conectada.</em></h1>
         <p>
-          Añade enlaces ilimitados de KICK. La página carga el perfil de cada canal y actualiza su estado automáticamente.
+          Añade uno o varios canales de KICK. El directorio evita duplicados y actualiza los perfiles automáticamente.
         </p>
 
         <form onSubmit={addChannel}>
-          <input
+          <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="kick.com/tuusuario o @tuusuario"
+            placeholder={"kick.com/tuusuario\nhttps://kick.com/otrocanal\n@otrouser"}
+            rows={3}
           />
-          <button disabled={adding}>{adding ? "AÑADIENDO..." : "AÑADIR MI CANAL"}</button>
+          <button disabled={adding}>{adding ? "AÑADIENDO..." : "AÑADIR CANAL"}</button>
         </form>
 
+        <div className="hint">Puedes pegar varios enlaces a la vez, uno por línea. No se aceptan canales duplicados.</div>
         {message && <div className="msg">{message}</div>}
-        {!loading && <div className="warn">{profileStatus}</div>}
+        {!loading && systemNotice && <div className="warn">{systemNotice}</div>}
 
         <div className="stats">
           <div><strong>{channels.length}</strong><small>MIEMBROS</small></div>
@@ -191,21 +279,25 @@ export default function Page() {
                     className="cover"
                     style={channel.thumbnail ? { backgroundImage: `linear-gradient(#09070daa,#09070dcc), url(${channel.thumbnail})` } : undefined}
                   >
-                    <div className="avatar">
-                      {channel.avatar ? <img src={channel.avatar} alt={channel.name} /> : initials(channel.name)}
-                    </div>
+                    {channel.avatar ? (
+                      <img className="avatarImg" src={channel.avatar} alt={channel.name} />
+                    ) : (
+                      <div className="avatar">{initials(channel.name || channel.slug)}</div>
+                    )}
                     <i className={channel.live ? "live" : ""}>{channel.live ? "● EN VIVO" : "OFFLINE"}</i>
                   </div>
                   <div className="body">
-                    <h3>{channel.name}</h3>
+                    <h3>{channel.name || channel.slug}</h3>
                     <p>@{channel.slug}</p>
-                    <div className="meta">
-                      <strong>{channel.live ? (channel.title || "Transmitiendo ahora") : "Perfil de KICK conectado"}</strong>
-                      <span>
-                        {channel.live
-                          ? `${channel.category || "Sin categoría"} • ${channel.viewers || 0} viewers`
-                          : `${channel.followers || 0} seguidores • Estado actualizado`}
-                      </span>
+                    <div className="profileInfo">
+                      {channel.live ? (
+                        <>
+                          <strong>{channel.title || "Transmitiendo ahora"}</strong>
+                          <span>{channel.category || "Sin categoría"} • {channel.viewers || 0} viewers</span>
+                        </>
+                      ) : (
+                        <span>{channel.followers ? `${channel.followers} seguidores` : "Perfil de KICK"}</span>
+                      )}
                     </div>
                     <a href={channel.url} target="_blank" rel="noreferrer">VER CANAL EN KICK ↗</a>
                   </div>
