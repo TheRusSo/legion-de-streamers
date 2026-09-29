@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase";
+import { getSupabaseAdmin, getSupabaseReadClient } from "@/lib/supabase";
 import {
   extractKickSlugs,
   fallbackKickChannel,
@@ -56,7 +56,7 @@ function offlineRow(row: ChannelRow) {
 }
 
 async function readRowsFromSupabase() {
-  const supabase = getSupabaseAdmin();
+  const supabase = getSupabaseReadClient();
   const { data, error } = await supabase
     .from("channels")
     .select("slug, created_at")
@@ -192,7 +192,7 @@ export async function GET() {
         storage: "supabase",
         permanent: false,
         code: "storage_error",
-        error: "No se pudieron cargar los canales guardados. Revisa SUPABASE_SERVICE_ROLE_KEY y la tabla public.channels.",
+        error: "No se pudieron cargar los canales guardados. Revisa las variables de Supabase en Vercel y la tabla public.channels.",
         storage_warning: getErrorMessage(error),
         total: 0
       },
@@ -228,14 +228,15 @@ export async function POST(req: NextRequest) {
         : "Todos esos canales ya estaban agregados."
     });
   } catch (error) {
+    const detail = getErrorMessage(error);
     return NextResponse.json(
       {
         ok: false,
         code: "storage_not_persistent",
         storage: "supabase",
         permanent: false,
-        error: "El canal no se guardó porque Supabase bloqueó la escritura. Revisa SUPABASE_SERVICE_ROLE_KEY en Vercel y la tabla public.channels.",
-        supabase_error: getErrorMessage(error)
+        error: `El canal no se guardó en Supabase. Detalle: ${detail}`,
+        supabase_error: detail
       },
       { status: 500 }
     );
