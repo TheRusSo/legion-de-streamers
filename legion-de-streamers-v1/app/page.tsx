@@ -21,6 +21,7 @@ type Channel = {
   avatar?: string;
   banner?: string;
   followers?: number;
+  featured?: boolean;
   source?: string;
 };
 
@@ -170,7 +171,10 @@ export default function Page() {
         throw new Error(data.error || "No se pudo cargar el directorio.");
       }
 
-      const visibleChannels = (data.channels || []).filter((channel) => !deletedSet.has(channel.slug.toLowerCase()));
+      const visibleChannels = (data.channels || [])
+        .filter((channel) => !deletedSet.has(channel.slug.toLowerCase()))
+        .sort((a, b) => Number(b.featured) - Number(a.featured) || Number(b.live) - Number(a.live) || (b.viewers || 0) - (a.viewers || 0));
+
       setChannels(visibleChannels);
       setSystemNotice(data.warning || "Perfiles y estado EN VIVO se actualizan automáticamente cada 30 segundos.");
     } catch (error) {
@@ -270,26 +274,29 @@ export default function Page() {
   const liveChannels = channels.filter((channel) => channel.live);
   const liveCount = liveChannels.length;
   const offlineCount = channels.length - liveCount;
-  const featuredChannel = channels.find((channel) => channel.slug.toLowerCase() === MAIN_CHANNEL) || channels[0];
+  const featuredChannels = channels.filter((channel) => channel.featured);
+  const featuredChannel = featuredChannels[0] || channels.find((channel) => channel.slug.toLowerCase() === MAIN_CHANNEL) || channels[0];
   const featuredCoverImage = originalCover(featuredChannel);
   const featuredAvatarImage = originalAvatar(featuredChannel);
   const recentChannels = [...channels]
-    .sort((a, b) => Number(b.live) - Number(a.live) || (b.viewers || 0) - (a.viewers || 0) || a.name.localeCompare(b.name))
+    .sort((a, b) => Number(b.featured) - Number(a.featured) || Number(b.live) - Number(a.live) || (b.viewers || 0) - (a.viewers || 0) || a.name.localeCompare(b.name))
     .slice(0, 5);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return channels.filter((channel) => {
-      const matchesSearch = `${channel.slug} ${channel.name} ${channel.title || ""} ${channel.category || ""}`
-        .toLowerCase()
-        .includes(q);
+    return channels
+      .filter((channel) => {
+        const matchesSearch = `${channel.slug} ${channel.name} ${channel.title || ""} ${channel.category || ""} ${channel.featured ? "destacado" : ""}`
+          .toLowerCase()
+          .includes(q);
 
-      const matchesTab =
-        tab === "all" ||
-        (tab === "live" ? channel.live : !channel.live);
+        const matchesTab =
+          tab === "all" ||
+          (tab === "live" ? channel.live : !channel.live);
 
-      return matchesSearch && matchesTab;
-    });
+        return matchesSearch && matchesTab;
+      })
+      .sort((a, b) => Number(b.featured) - Number(a.featured) || Number(b.live) - Number(a.live) || a.name.localeCompare(b.name));
   }, [channels, search, tab]);
 
   return (
@@ -342,7 +349,7 @@ export default function Page() {
           <div className="miniStats">
             <div><b>{channels.length}</b><span>Canales</span></div>
             <div><b>{liveCount}</b><span>En vivo</span></div>
-            <div><b>30s</b><span>Actualización</span></div>
+            <div><b>{featuredChannels.length || 1}</b><span>Destacados</span></div>
           </div>
         </div>
       </section>
@@ -354,25 +361,29 @@ export default function Page() {
             <h2>Streamers en vivo</h2>
             <p>Descubre quién está transmitiendo ahora en la Legión.</p>
           </div>
-          <a href="#directorio">Ver todos los en vivo →</a>
+          <a href="#directorio" onClick={() => setTab("live")}>Ver todos los en vivo →</a>
         </div>
-        <div className="liveScroller">
-          {(liveChannels.length ? liveChannels : channels.slice(0, 6)).slice(0, 6).map((channel) => {
-            const coverImage = originalCover(channel);
-            const avatarImage = originalAvatar(channel);
-            return (
-              <a key={channel.slug} className="liveCard" href={channel.url} target="_blank" rel="noreferrer">
-                <div className="liveBg" style={coverImage ? { backgroundImage: `linear-gradient(#10071db0,#10071de8), url(${coverImage})` } : undefined} />
-                <span className={channel.live ? "liveBadge on" : "liveBadge"}>{channel.live ? "EN VIVO" : "OFFLINE"}</span>
-                {avatarImage ? <img src={avatarImage} alt={channel.name || channel.slug} /> : <strong>{initials(channel.name || channel.slug)}</strong>}
-                <div>
-                  <b>{channel.name || channel.slug}</b>
-                  <small>{channel.category || "KICK"}</small>
-                </div>
-              </a>
-            );
-          })}
-        </div>
+        {liveChannels.length ? (
+          <div className="liveScroller">
+            {liveChannels.slice(0, 6).map((channel) => {
+              const coverImage = originalCover(channel);
+              const avatarImage = originalAvatar(channel);
+              return (
+                <a key={channel.slug} className="liveCard" href={channel.url} target="_blank" rel="noreferrer">
+                  <div className="liveBg" style={coverImage ? { backgroundImage: `linear-gradient(#10071db0,#10071de8), url(${coverImage})` } : undefined} />
+                  <span className="liveBadge on">EN VIVO</span>
+                  {avatarImage ? <img src={avatarImage} alt={channel.name || channel.slug} /> : <strong>{initials(channel.name || channel.slug)}</strong>}
+                  <div>
+                    <b>{channel.name || channel.slug}</b>
+                    <small>{channel.category || "KICK"} • {channel.viewers || 0} viewers</small>
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty">Ahora mismo no hay canales marcados como EN VIVO.</div>
+        )}
       </section>
 
       <section className="spotlightGrid">
@@ -385,7 +396,7 @@ export default function Page() {
             </div>
             <div>
               <h2>{featuredChannel?.name || "SoyelMoro"}</h2>
-              <p>@{featuredChannel?.slug || MAIN_CHANNEL}</p>
+              <p>@{featuredChannel?.slug || MAIN_CHANNEL} {featuredChannel?.featured ? "• ⭐ Destacado por admin" : ""}</p>
               <div className="tagRow">
                 <span>{featuredChannel?.category || "KICK"}</span>
                 <span>{featuredChannel?.live ? `${featuredChannel.viewers || 0} viewers` : "Comunidad"}</span>
@@ -407,7 +418,7 @@ export default function Page() {
                 {originalAvatar(channel) ? <img src={originalAvatar(channel)} alt={channel.name || channel.slug} /> : <strong>{initials(channel.name || channel.slug)}</strong>}
                 <div>
                   <b>{channel.name || channel.slug}</b>
-                  <small>{channel.live ? "está en vivo ahora" : "forma parte de la Legión"}</small>
+                  <small>{channel.live ? "está en vivo ahora" : channel.featured ? "canal destacado" : "forma parte de la Legión"}</small>
                 </div>
               </a>
             ))}
@@ -415,9 +426,9 @@ export default function Page() {
         </article>
 
         <article className="membersBox">
-          <span className="cardLabel">NUEVOS MIEMBROS</span>
-          <b>+{channels.length}</b>
-          <p>Canales dentro de la comunidad</p>
+          <span className="cardLabel">DESTACADOS</span>
+          <b>{featuredChannels.length || 1}</b>
+          <p>Canales resaltados desde el panel admin</p>
           <a href="#directorio">Ver toda la comunidad →</a>
         </article>
       </section>
@@ -452,9 +463,9 @@ export default function Page() {
                     <div className="channelTop">
                       {avatarImage ? <img src={avatarImage} alt={channel.name || channel.slug} /> : <strong>{initials(channel.name || channel.slug)}</strong>}
                       <div>
-                        <h3>{channel.name || channel.slug}</h3>
+                        <h3>{channel.name || channel.slug} {channel.featured ? "⭐" : ""}</h3>
                         <p><i className={channel.live ? "status on" : "status"} /> {channel.live ? "En vivo" : "Desconectado"}</p>
-                        <small>{channel.category || "KICK"}</small>
+                        <small>{channel.featured ? "DESTACADO • " : ""}{channel.category || "KICK"}</small>
                       </div>
                       <span className={channel.live ? "state live" : "state"}>{channel.live ? "EN VIVO" : "OFFLINE"}</span>
                     </div>
