@@ -1,5 +1,6 @@
 import "./globals.css";
 import "./brand.css";
+import "./featured-polish.css";
 
 export const metadata = {
   title: "Legión de Streamers",
