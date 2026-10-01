@@ -20,24 +20,31 @@ type OfficialKickChannel = {
   stream_title?: string;
   channel_description?: string;
   banner_picture?: string;
+  banner_image?: string | { url?: string };
   profile_picture?: string;
   profile_pic?: string;
+  profilepic?: string;
   avatar?: string;
-  followers_count?: number;
-  followers?: number;
+  avatar_url?: string;
+  followers_count?: number | string;
+  followers?: number | string;
+  is_live?: boolean | number | string;
+  live?: boolean | number | string;
+  status?: string;
   user?: {
     username?: string;
     profile_pic?: string;
     profile_picture?: string;
+    profilepic?: string;
     avatar?: string;
+    avatar_url?: string;
+    image?: string;
+    image_url?: string;
   } | null;
-  category?: { name?: string; thumbnail?: string } | null;
-  stream?: {
-    is_live?: boolean;
-    start_time?: string;
-    thumbnail?: string;
-    viewer_count?: number;
-  } | null;
+  category?: { name?: string; slug?: string; thumbnail?: string | { url?: string } } | null;
+  stream?: AnyRecord | null;
+  livestream?: AnyRecord | null;
+  live_stream?: AnyRecord | null;
 };
 
 type AnyRecord = Record<string, any>;
@@ -100,88 +107,220 @@ export function fallbackKickChannel(slug: string): NormalizedKickChannel {
 }
 
 function asNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 function firstString(...values: unknown[]) {
   for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value;
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (value && typeof value === "object") {
+      const record = value as AnyRecord;
+      const nested = firstString(record.url, record.src, record.path, record.image, record.image_url);
+      if (nested) return nested;
+    }
   }
   return "";
 }
 
+function normalizeImageUrl(value: unknown) {
+  const raw = firstString(value);
+  if (!raw) return "";
+
+  if (raw.startsWith("//")) return `https:${raw}`;
+  if (raw.startsWith("/")) return `https://kick.com${raw}`;
+  return raw;
+}
+
+function firstImage(...values: unknown[]) {
+  for (const value of values) {
+    const image = normalizeImageUrl(value);
+    if (image) return image;
+  }
+  return "";
+}
+
+function isTruthyLive(value: unknown) {
+  if (value === true) return true;
+  if (value === 1) return true;
+  if (typeof value === "string") {
+    const text = value.toLowerCase().trim();
+    return ["true", "1", "live", "online", "started", "active", "on"].includes(text);
+  }
+  return false;
+}
+
+function isFalseLive(value: unknown) {
+  if (value === false) return true;
+  if (value === 0) return true;
+  if (typeof value === "string") {
+    const text = value.toLowerCase().trim();
+    return ["false", "0", "offline", "ended", "inactive", "off"].includes(text);
+  }
+  return false;
+}
+
+function hasActiveLivestream(livestream: AnyRecord | null | undefined) {
+  if (!livestream || typeof livestream !== "object") return false;
+
+  if (livestream.ended_at || livestream.endedAt || livestream.is_ended) return false;
+  if (isFalseLive(livestream.is_live) || isFalseLive(livestream.live) || isFalseLive(livestream.online)) return false;
+
+  if (
+    isTruthyLive(livestream.is_live) ||
+    isTruthyLive(livestream.live) ||
+    isTruthyLive(livestream.online) ||
+    isTruthyLive(livestream.status)
+  ) {
+    return true;
+  }
+
+  return Boolean(
+    livestream.id ||
+    livestream.session_title ||
+    livestream.title ||
+    livestream.thumbnail ||
+    livestream.thumbnail_url ||
+    livestream.started_at ||
+    livestream.start_time ||
+    asNumber(livestream.viewer_count) > 0
+  );
+}
+
+function getLivestream(data: AnyRecord) {
+  return (
+    data.livestream ||
+    data.live_stream ||
+    data.liveStream ||
+    data.current_livestream ||
+    data.current_stream ||
+    data.stream ||
+    data.broadcast ||
+    null
+  ) as AnyRecord | null;
+}
+
+function getChannelLive(data: AnyRecord, livestream: AnyRecord | null) {
+  return (
+    isTruthyLive(data.is_live) ||
+    isTruthyLive(data.live) ||
+    isTruthyLive(data.online) ||
+    isTruthyLive(data.status) ||
+    hasActiveLivestream(livestream)
+  );
+}
+
 function normalizeOfficialChannel(channel: OfficialKickChannel): NormalizedKickChannel {
   const slug = cleanKickSlug(channel.slug);
-  const live = Boolean(channel.stream?.is_live);
+  const livestream = getLivestream(channel as AnyRecord);
+  const live = getChannelLive(channel as AnyRecord, livestream);
+  const category = livestream?.category || channel.category || {};
 
   return {
     slug,
     name: firstString(channel.user?.username, channel.slug, slug),
     url: `https://kick.com/${slug}`,
     live,
-    title: channel.stream_title || "",
-    description: channel.channel_description || "",
-    category: channel.category?.name || "",
-    viewers: channel.stream?.viewer_count || 0,
-    thumbnail: channel.stream?.thumbnail || channel.category?.thumbnail || "",
-    avatar: firstString(
+    title: firstString(livestream?.session_title, livestream?.title, channel.stream_title),
+    description: firstString(channel.channel_description),
+    category: firstString(category?.name, category?.slug),
+    viewers: asNumber(livestream?.viewer_count),
+    thumbnail: firstImage(
+      livestream?.thumbnail?.url,
+      livestream?.thumbnail,
+      livestream?.thumbnail_url,
+      livestream?.banner_image,
+      channel.category?.thumbnail
+    ),
+    avatar: firstImage(
       channel.profile_picture,
       channel.profile_pic,
+      channel.profilepic,
       channel.avatar,
+      channel.avatar_url,
       channel.user?.profile_pic,
       channel.user?.profile_picture,
-      channel.user?.avatar
+      channel.user?.profilepic,
+      channel.user?.avatar,
+      channel.user?.avatar_url,
+      channel.user?.image,
+      channel.user?.image_url
     ),
-    banner: channel.banner_picture || "",
+    banner: firstImage(channel.banner_picture, channel.banner_image),
     followers: asNumber(channel.followers_count || channel.followers),
-    started_at: channel.stream?.start_time || "",
+    started_at: firstString(livestream?.start_time, livestream?.started_at, livestream?.created_at),
     source: "official"
   };
 }
 
-function normalizePublicChannel(data: AnyRecord, requestedSlug: string): NormalizedKickChannel {
-  const livestream = data.livestream || data.stream || null;
-  const user = data.user || {};
+function normalizePublicChannel(payload: AnyRecord, requestedSlug: string): NormalizedKickChannel {
+  const data = (payload?.data && typeof payload.data === "object") ? payload.data : payload;
+  const livestream = getLivestream(data);
+  const user = data.user || data.owner || data.channel_user || {};
   const categories = Array.isArray(livestream?.categories) ? livestream.categories : [];
   const category = categories[0] || livestream?.category || data.category || {};
-  const slug = cleanKickSlug(firstString(data.slug, data.username, user.username, requestedSlug)) || requestedSlug;
-  const banner = firstString(
+  const slug = cleanKickSlug(firstString(data.slug, data.username, data.name, user.username, requestedSlug)) || requestedSlug;
+  const banner = firstImage(
     data.banner_image?.url,
     data.banner_image,
     data.banner_picture,
     data.banner,
+    data.cover_image?.url,
     data.cover_image,
-    data.cover_image?.url
+    data.cover,
+    data.header_image,
+    data.offline_banner_image,
+    data.offline_banner_image?.url
   );
-  const avatar = firstString(
+  const avatar = firstImage(
     user.profile_pic,
+    user.profilepic,
     user.profile_picture,
     user.avatar,
     user.avatar_url,
+    user.image,
+    user.image_url,
+    user.picture,
     data.profile_pic,
+    data.profilepic,
     data.profile_picture,
+    data.user_profile_picture,
     data.avatar,
-    data.avatar_url
+    data.avatar_url,
+    data.image,
+    data.image_url,
+    data.picture,
+    data.profile?.profile_pic,
+    data.profile?.profilepic,
+    data.profile?.profile_picture,
+    data.profile?.avatar,
+    data.profile?.image
   );
-  const thumbnail = firstString(
+  const thumbnail = firstImage(
     livestream?.thumbnail?.url,
     livestream?.thumbnail,
     livestream?.thumbnail_url,
     livestream?.banner_image,
+    livestream?.banner_image?.url,
     data.thumbnail?.url,
     data.thumbnail,
+    data.thumbnail_url,
     banner
   );
 
   return {
     slug,
-    name: firstString(user.username, data.username, data.slug, slug),
+    name: firstString(user.username, data.username, data.name, data.slug, slug),
     url: `https://kick.com/${slug}`,
-    live: Boolean(livestream && livestream.is_live !== false),
+    live: getChannelLive(data, livestream),
     title: firstString(livestream?.session_title, livestream?.title, data.stream_title),
-    description: firstString(data.channel_description, data.description),
+    description: firstString(data.channel_description, data.description, data.bio),
     category: firstString(category?.name, category?.slug),
-    viewers: asNumber(livestream?.viewer_count),
+    viewers: asNumber(livestream?.viewer_count || livestream?.viewers || data.viewer_count),
     thumbnail,
     avatar,
     banner,
@@ -196,13 +335,13 @@ function mergeKickChannel(primary: NormalizedKickChannel, extra?: NormalizedKick
 
   return {
     ...primary,
-    name: firstString(primary.name, extra.name, primary.slug),
+    name: firstString(extra.name, primary.name, primary.slug),
     title: firstString(primary.title, extra.title),
     description: firstString(primary.description, extra.description),
     category: firstString(primary.category, extra.category),
-    thumbnail: firstString(primary.thumbnail, extra.thumbnail, extra.banner, extra.avatar),
-    avatar: firstString(primary.avatar, extra.avatar, extra.banner, extra.thumbnail),
-    banner: firstString(primary.banner, extra.banner, extra.thumbnail),
+    thumbnail: firstImage(primary.thumbnail, extra.thumbnail, extra.banner, extra.avatar),
+    avatar: firstImage(primary.avatar, extra.avatar, extra.thumbnail, extra.banner),
+    banner: firstImage(primary.banner, extra.banner, extra.thumbnail),
     followers: primary.followers || extra.followers || 0,
     started_at: firstString(primary.started_at, extra.started_at),
     live: primary.live || extra.live,
@@ -257,7 +396,7 @@ async function fetchOfficialBatch(slugs: string[]) {
     for (const slug of batch) url.searchParams.append("slug", slug);
 
     const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
       cache: "no-store"
     });
 
@@ -276,31 +415,56 @@ async function fetchOfficialBatch(slugs: string[]) {
   return map;
 }
 
-async function fetchPublicChannel(slug: string) {
-  try {
-    const res = await fetch(`https://kick.com/api/v2/channels/${encodeURIComponent(slug)}`, {
-      headers: { Accept: "application/json" },
-      cache: "no-store"
-    });
+async function fetchPublicJson(url: string) {
+  const res = await fetch(url, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "User-Agent": "Mozilla/5.0 LegionStreamers/1.0",
+      "Cache-Control": "no-cache"
+    },
+    cache: "no-store"
+  });
 
-    if (!res.ok) return null;
-    const data = await res.json() as AnyRecord;
-    return normalizePublicChannel(data, slug);
-  } catch {
-    return null;
+  if (!res.ok) return null;
+  return await res.json().catch(() => null) as AnyRecord | null;
+}
+
+async function fetchPublicChannel(slug: string) {
+  const encoded = encodeURIComponent(slug);
+  const urls = [
+    `https://kick.com/api/v2/channels/${encoded}`,
+    `https://kick.com/api/v1/channels/${encoded}`
+  ];
+
+  for (const url of urls) {
+    try {
+      const data = await fetchPublicJson(url);
+      if (!data) continue;
+
+      const normalized = normalizePublicChannel(data, slug);
+      if (normalized.slug) return normalized;
+    } catch {
+      // Try the next public endpoint.
+    }
   }
+
+  return null;
 }
 
 async function fetchPublicChannels(slugs: string[]) {
   const map = new Map<string, NormalizedKickChannel>();
 
-  for (let i = 0; i < slugs.length; i += 12) {
-    const batch = slugs.slice(i, i + 12);
+  for (let i = 0; i < slugs.length; i += 10) {
+    const batch = slugs.slice(i, i + 10);
     const results = await Promise.all(batch.map(fetchPublicChannel));
 
-    for (const result of results) {
-      if (result?.slug) map.set(result.slug, result);
-    }
+    results.forEach((result, index) => {
+      const requestedSlug = batch[index];
+      if (result?.slug) {
+        map.set(requestedSlug, { ...result, slug: requestedSlug, url: `https://kick.com/${requestedSlug}` });
+        map.set(result.slug, result);
+      }
+    });
   }
 
   return map;
@@ -319,7 +483,6 @@ export async function fetchKickChannels(slugs: string[]) {
     // Continue with public profile fallback.
   }
 
-  // Siempre consultamos el perfil público para completar foto original, banner y seguidores.
   const publicMap = await fetchPublicChannels(unique);
   for (const slug of unique) {
     const current = finalMap.get(slug) || fallbackKickChannel(slug);
