@@ -42,7 +42,7 @@ type OfficialKickChannel = AnyRecord & {
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
-const KICK_PUBLIC_HEADERS: HeadersInit = {
+const KICK_PUBLIC_HEADERS = {
   Accept: "application/json, text/plain, */*",
   "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
   "Cache-Control": "no-cache",
