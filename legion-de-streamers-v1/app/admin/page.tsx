@@ -6,6 +6,7 @@ import styles from "./admin.module.css";
 type AdminChannel = {
   slug: string;
   created_at?: string;
+  featured?: boolean;
 };
 
 type ApiResult = {
@@ -18,6 +19,8 @@ type ApiResult = {
   deleted?: string;
   total?: number;
   permanent?: boolean;
+  featured?: boolean;
+  slug?: string;
   updated?: { oldSlug: string; newSlug: string };
 };
 
@@ -135,7 +138,7 @@ export default function AdminPage() {
   const [error, setError] = useState("");
 
   const sortedChannels = useMemo(() => {
-    return [...channels].sort((a, b) => a.slug.localeCompare(b.slug));
+    return [...channels].sort((a, b) => Number(b.featured) - Number(a.featured) || a.slug.localeCompare(b.slug));
   }, [channels]);
 
   useEffect(() => {
@@ -262,9 +265,7 @@ export default function AdminPage() {
       const added = data.added || [];
       const duplicates = data.duplicates || [];
 
-      if (added.length) {
-        restorePublicSlugs(added);
-      }
+      if (added.length) restorePublicSlugs(added);
 
       if (added.length && duplicates.length) {
         setNotice(`Añadidos: ${formatSlugList(added)}. Ya existían: ${formatSlugList(duplicates)}.`);
@@ -309,6 +310,29 @@ export default function AdminPage() {
     }
   }
 
+  async function toggleFeatured(channel: AdminChannel) {
+    const next = !channel.featured;
+    setBusySlug(channel.slug);
+    setError("");
+
+    try {
+      const data = await request("/api/admin/channels", {
+        method: "PATCH",
+        body: JSON.stringify({ action: "featured", slug: channel.slug, featured: next })
+      });
+
+      setNotice(next
+        ? `Destacado activado: @${channel.slug}. Aparecerá como canal destacado en la página pública.`
+        : `Destacado quitado: @${channel.slug}.`);
+
+      if (!data.channels) await loadChannels();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error desconocido.");
+    } finally {
+      setBusySlug("");
+    }
+  }
+
   async function deleteChannel(slug: string) {
     const ok = window.confirm(`¿Eliminar @${slug} del directorio público?`);
     if (!ok) return;
@@ -321,8 +345,6 @@ export default function AdminPage() {
         method: "DELETE"
       });
 
-      // Borra también cualquier copia local usada por la página pública en este navegador.
-      // Esto evita que un canal eliminado en Supabase vuelva a salir por el fallback local.
       removePublicLocalSlugs([slug]);
       removeChannelFromPanel(slug);
       setNotice(`Eliminado: @${slug}. Ya no aparecerá en la página pública.`);
@@ -340,7 +362,7 @@ export default function AdminPage() {
           <span className={styles.badge}>ACCESO PRIVADO</span>
           <h1 className={styles.title}>Panel <span>Admin</span></h1>
           <p className={styles.text}>
-            Entra con tu contraseña privada para editar o eliminar canales del directorio de Legión de Streamers.
+            Entra con tu contraseña privada para editar, eliminar o destacar canales del directorio de Legión de Streamers.
           </p>
 
           <form className={styles.formGrid} onSubmit={login}>
@@ -371,7 +393,7 @@ export default function AdminPage() {
             <span className={styles.badge}>PANEL PRIVADO</span>
             <h1 className={styles.title}>Gestionar <span>canales</span></h1>
             <p className={styles.text}>
-              Este panel está entrelazado con la página pública: todo canal que añadas, edites o elimines aquí se refleja en el directorio principal.
+              Añade, edita, elimina y marca canales como destacados. Los destacados aparecen arriba en la página pública.
             </p>
           </div>
 
@@ -405,6 +427,7 @@ export default function AdminPage() {
                   <tr>
                     <th>Canal</th>
                     <th>Fecha</th>
+                    <th>Destacado</th>
                     <th>Editar usuario</th>
                     <th>Acciones</th>
                   </tr>
@@ -413,12 +436,22 @@ export default function AdminPage() {
                   {sortedChannels.map((channel) => (
                     <tr key={channel.slug}>
                       <td>
-                        <div className={styles.slug}>@{channel.slug}</div>
+                        <div className={styles.slug}>@{channel.slug} {channel.featured ? "⭐" : ""}</div>
                         <a className={styles.link} href={`https://kick.com/${channel.slug}`} target="_blank" rel="noreferrer">
                           Ver en KICK ↗
                         </a>
                       </td>
                       <td>{formatDate(channel.created_at)}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className={channel.featured ? styles.dangerButton : styles.ghostButton}
+                          onClick={() => toggleFeatured(channel)}
+                          disabled={busySlug === channel.slug}
+                        >
+                          {channel.featured ? "QUITAR" : "DESTACAR"}
+                        </button>
+                      </td>
                       <td>
                         <input
                           className={styles.miniInput}
