@@ -9,13 +9,15 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const FEATURED_CHANNEL = "soyelmoro";
+const DEFAULT_FEATURED_CHANNEL = "soyelmoro";
 const DELETE_MARKER_PREFIX = "deleted_";
+const FEATURED_MARKER_PREFIX = "featured_";
 const MAX_SLUG_LENGTH = 80;
 
 type ChannelRow = {
   slug: string;
   created_at: string;
+  featured?: boolean;
 };
 
 type AddResult = {
@@ -62,14 +64,29 @@ function isDeletionMarker(slug: string) {
   return cleanStoredSlug(slug).startsWith(DELETE_MARKER_PREFIX);
 }
 
+function isFeaturedMarker(slug: string) {
+  return cleanStoredSlug(slug).startsWith(FEATURED_MARKER_PREFIX);
+}
+
+function isSystemMarker(slug: string) {
+  return isDeletionMarker(slug) || isFeaturedMarker(slug);
+}
+
 function deletionTargetFromMarker(slug: string) {
   const clean = cleanStoredSlug(slug);
   if (!isDeletionMarker(clean)) return "";
   return clean.slice(DELETE_MARKER_PREFIX.length);
 }
 
+function featuredTargetFromMarker(slug: string) {
+  const clean = cleanStoredSlug(slug);
+  if (!isFeaturedMarker(clean)) return "";
+  return clean.slice(FEATURED_MARKER_PREFIX.length);
+}
+
 function splitVisibleRows(rows: ChannelRow[]) {
   const deleted = new Set<string>();
+  const featured = new Set<string>();
   const visibleRows: ChannelRow[] = [];
 
   for (const row of rows) {
@@ -82,12 +99,21 @@ function splitVisibleRows(rows: ChannelRow[]) {
       continue;
     }
 
-    visibleRows.push({ slug, created_at: row.created_at });
+    if (isFeaturedMarker(slug)) {
+      const target = featuredTargetFromMarker(slug);
+      if (target) featured.add(target);
+      continue;
+    }
+
+    visibleRows.push({ slug, created_at: row.created_at, featured: false });
   }
 
   return {
     deleted,
-    visibleRows: visibleRows.filter((row) => !deleted.has(row.slug.toLowerCase()))
+    featured,
+    visibleRows: visibleRows
+      .filter((row) => !deleted.has(row.slug.toLowerCase()))
+      .map((row) => ({ ...row, featured: featured.has(row.slug.toLowerCase()) }))
   };
 }
 
@@ -95,30 +121,37 @@ function filterDeletedRows(rows: ChannelRow[], deleted: Set<string>) {
   return rows.filter((row) => !deleted.has(row.slug.toLowerCase()));
 }
 
-function rowsFromSlugs(slugs: string[]) {
+function rowsFromSlugs(slugs: string[], featured = false) {
   const timestamp = nowIso();
-  return unique(slugs).map((slug) => ({ slug, created_at: timestamp }));
+  return unique(slugs).map((slug) => ({ slug, created_at: timestamp, featured }));
 }
 
 function mergeRows(primaryRows: ChannelRow[], extraRows: ChannelRow[]) {
-  const seen = new Set<string>();
-  const merged: ChannelRow[] = [];
+  const map = new Map<string, ChannelRow>();
 
   for (const row of [...primaryRows, ...extraRows]) {
     const slug = cleanStoredSlug(row.slug);
-    if (!slug || isDeletionMarker(slug) || seen.has(slug)) continue;
-    seen.add(slug);
-    merged.push({ slug, created_at: row.created_at });
+    if (!slug || isSystemMarker(slug)) continue;
+
+    const existing = map.get(slug);
+    if (!existing) {
+      map.set(slug, { slug, created_at: row.created_at, featured: Boolean(row.featured) });
+    } else if (row.featured) {
+      map.set(slug, { ...existing, featured: true });
+    }
   }
 
-  return merged.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return [...map.values()].sort(
+    (a, b) => Number(b.featured) - Number(a.featured) || b.created_at.localeCompare(a.created_at)
+  );
 }
 
 function offlineRow(row: ChannelRow) {
   return {
     ...fallbackKickChannel(row.slug),
     status: "offline",
-    created_at: row.created_at
+    created_at: row.created_at,
+    featured: Boolean(row.featured)
   };
 }
 
@@ -146,7 +179,7 @@ async function findExistingChannels(slugs: string[]) {
 
 async function insertRows(slugs: string[]) {
   const supabase = getSupabasePublicWriteClient();
-  const cleanSlugs = unique(slugs).filter((slug) => !isDeletionMarker(slug));
+  const cleanSlugs = unique(slugs).filter((slug) => !isSystemMarker(slug));
   const simpleRows = cleanSlugs.map((slug) => ({ slug }));
 
   if (!simpleRows.length) return;
@@ -164,7 +197,7 @@ async function insertRows(slugs: string[]) {
 }
 
 async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
-  const cleanSlugs = unique(slugs);
+  const cleanSlugs = unique(slugs).filter((slug) => !isSystemMarker(slug));
   if (!cleanSlugs.length) return { added: [], duplicates: [] };
 
   const existing = await findExistingChannels(cleanSlugs);
@@ -204,37 +237,25 @@ async function hydrateRows(rows: ChannelRow[]) {
       return {
         ...kick,
         status: kick.live ? "live" : "offline",
-        created_at: row.created_at
+        created_at: row.created_at,
+        featured: Boolean(row.featured)
       };
     })
-    .sort((a, b) => Number(b.live) - Number(a.live) || a.name.localeCompare(b.name));
+    .sort((a, b) => Number(b.featured) - Number(a.featured) || Number(b.live) - Number(a.live) || a.name.localeCompare(b.name));
 
   return { channels, kickStatus };
 }
 
 function stringifyPayloadValue(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => stringifyPayloadValue(item));
-  }
-
+  if (Array.isArray(value)) return value.flatMap((item) => stringifyPayloadValue(item));
   if (typeof value === "string") return [value];
   if (typeof value === "number") return [String(value)];
   return [];
 }
 
 function parseRequestSlugs(body: Record<string, unknown>) {
-  const values = [
-    body.channels,
-    body.slug,
-    body.url,
-    body.channel,
-    body.text
-  ];
-
-  const text = values
-    .flatMap((value) => stringifyPayloadValue(value))
-    .join("\n");
-
+  const values = [body.channels, body.slug, body.url, body.channel, body.text];
+  const text = values.flatMap((value) => stringifyPayloadValue(value)).join("\n");
   return extractKickSlugs(text);
 }
 
@@ -247,6 +268,7 @@ export async function GET(req: NextRequest) {
   const extraRows = rowsFromSlugs(parseExtraSlugs(req));
   let rows: ChannelRow[] = [];
   let deleted = new Set<string>();
+  let hasAdminFeatured = false;
   let storageWarning = "";
   let storage = "supabase";
 
@@ -254,17 +276,18 @@ export async function GET(req: NextRequest) {
     const visible = await readVisibleRowsFromSupabase();
     rows = visible.visibleRows;
     deleted = visible.deleted;
+    hasAdminFeatured = rows.some((row) => row.featured);
   } catch (error) {
     storage = "local_fallback";
     storageWarning = getErrorMessage(error);
   }
 
-  // El canal destacado siempre se hidrata con datos reales de KICK,
-  // salvo que haya sido bloqueado explícitamente desde el panel admin.
-  const featuredRows = deleted.has(FEATURED_CHANNEL) ? [] : rowsFromSlugs([FEATURED_CHANNEL]);
+  // Si el admin no eligió destacados todavía, SoyelMoro queda como destacado por defecto.
+  const defaultFeaturedRows = !hasAdminFeatured && !deleted.has(DEFAULT_FEATURED_CHANNEL)
+    ? rowsFromSlugs([DEFAULT_FEATURED_CHANNEL], true)
+    : [];
 
-  // Los canales guardados localmente en el navegador también se filtran con los borrados del admin.
-  const finalRows = mergeRows(rows, [...featuredRows, ...filterDeletedRows(extraRows, deleted)]);
+  const finalRows = mergeRows(rows, [...defaultFeaturedRows, ...filterDeletedRows(extraRows, deleted)]);
   const { channels, kickStatus } = await hydrateRows(finalRows);
 
   return NextResponse.json({
@@ -296,7 +319,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await insertSlugsIntoSupabase(slugs);
-    const rows = result.added.map((slug) => ({ slug, created_at: nowIso() }));
+    const rows = result.added.map((slug) => ({ slug, created_at: nowIso(), featured: false }));
     const { channels } = await hydrateRows(rows);
 
     return NextResponse.json({
@@ -311,7 +334,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     const detail = getErrorMessage(error);
-    const added = unique(slugs);
+    const added = unique(slugs).filter((slug) => !isSystemMarker(slug));
     const rows = rowsFromSlugs(added);
     const { channels } = await hydrateRows(rows);
 
