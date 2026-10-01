@@ -15,12 +15,13 @@ export type NormalizedKickChannel = {
   source: "official" | "public" | "fallback";
 };
 
+type AnyRecord = Record<string, any>;
+
 type OfficialKickChannel = {
   slug: string;
   stream_title?: string;
   channel_description?: string;
   banner_picture?: string;
-  banner_image?: string | { url?: string };
   profile_picture?: string;
   profile_pic?: string;
   profilepic?: string;
@@ -30,7 +31,6 @@ type OfficialKickChannel = {
   followers?: number | string;
   is_live?: boolean | number | string;
   live?: boolean | number | string;
-  status?: string;
   user?: {
     username?: string;
     profile_pic?: string;
@@ -41,13 +41,27 @@ type OfficialKickChannel = {
     image?: string;
     image_url?: string;
   } | null;
-  category?: { name?: string; slug?: string; thumbnail?: string | { url?: string } } | null;
-  stream?: AnyRecord | null;
+  category?: { name?: string; slug?: string; thumbnail?: string } | null;
+  stream?: {
+    is_live?: boolean | number | string;
+    live?: boolean | number | string;
+    start_time?: string;
+    started_at?: string;
+    created_at?: string;
+    thumbnail?: string | { url?: string };
+    thumbnail_url?: string;
+    banner_image?: string | { url?: string };
+    viewer_count?: number | string;
+    viewers?: number | string;
+    session_title?: string;
+    title?: string;
+    category?: { name?: string; slug?: string } | null;
+    categories?: Array<{ name?: string; slug?: string }>;
+    ended_at?: string;
+  } | null;
   livestream?: AnyRecord | null;
   live_stream?: AnyRecord | null;
 };
-
-type AnyRecord = Record<string, any>;
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
@@ -120,122 +134,86 @@ function firstString(...values: unknown[]) {
     if (typeof value === "string" && value.trim()) return value.trim();
     if (value && typeof value === "object") {
       const record = value as AnyRecord;
-      const nested = firstString(record.url, record.src, record.path, record.image, record.image_url);
-      if (nested) return nested;
+      if (typeof record.url === "string" && record.url.trim()) return record.url.trim();
+      if (typeof record.src === "string" && record.src.trim()) return record.src.trim();
     }
   }
   return "";
 }
 
-function normalizeImageUrl(value: unknown) {
-  const raw = firstString(value);
-  if (!raw) return "";
-
-  if (raw.startsWith("//")) return `https:${raw}`;
-  if (raw.startsWith("/")) return `https://kick.com${raw}`;
-  return raw;
+function toImage(value: unknown) {
+  const image = firstString(value);
+  if (!image) return "";
+  if (image.startsWith("//")) return `https:${image}`;
+  if (image.startsWith("/")) return `https://kick.com${image}`;
+  return image;
 }
 
 function firstImage(...values: unknown[]) {
   for (const value of values) {
-    const image = normalizeImageUrl(value);
+    const image = toImage(value);
     if (image) return image;
   }
   return "";
 }
 
-function isTruthyLive(value: unknown) {
-  if (value === true) return true;
-  if (value === 1) return true;
+function isTrueLike(value: unknown) {
+  if (value === true || value === 1) return true;
   if (typeof value === "string") {
-    const text = value.toLowerCase().trim();
-    return ["true", "1", "live", "online", "started", "active", "on"].includes(text);
+    return ["true", "1", "live", "online", "active", "started"].includes(value.toLowerCase().trim());
   }
   return false;
 }
 
-function isFalseLive(value: unknown) {
-  if (value === false) return true;
-  if (value === 0) return true;
+function isFalseLike(value: unknown) {
+  if (value === false || value === 0) return true;
   if (typeof value === "string") {
-    const text = value.toLowerCase().trim();
-    return ["false", "0", "offline", "ended", "inactive", "off"].includes(text);
+    return ["false", "0", "offline", "ended", "inactive"].includes(value.toLowerCase().trim());
   }
   return false;
 }
 
-function hasActiveLivestream(livestream: AnyRecord | null | undefined) {
+function getLivestream(data: AnyRecord) {
+  return data.livestream || data.live_stream || data.liveStream || data.current_livestream || data.current_stream || data.stream || null;
+}
+
+function isLiveChannel(data: AnyRecord, livestream: AnyRecord | null) {
+  if (isTrueLike(data.is_live) || isTrueLike(data.live) || isTrueLike(data.online) || isTrueLike(data.status)) return true;
   if (!livestream || typeof livestream !== "object") return false;
-
   if (livestream.ended_at || livestream.endedAt || livestream.is_ended) return false;
-  if (isFalseLive(livestream.is_live) || isFalseLive(livestream.live) || isFalseLive(livestream.online)) return false;
-
-  if (
-    isTruthyLive(livestream.is_live) ||
-    isTruthyLive(livestream.live) ||
-    isTruthyLive(livestream.online) ||
-    isTruthyLive(livestream.status)
-  ) {
-    return true;
-  }
+  if (isFalseLike(livestream.is_live) || isFalseLike(livestream.live) || isFalseLike(livestream.online)) return false;
 
   return Boolean(
+    isTrueLike(livestream.is_live) ||
+    isTrueLike(livestream.live) ||
+    isTrueLike(livestream.online) ||
+    isTrueLike(livestream.status) ||
     livestream.id ||
     livestream.session_title ||
     livestream.title ||
     livestream.thumbnail ||
     livestream.thumbnail_url ||
-    livestream.started_at ||
     livestream.start_time ||
+    livestream.started_at ||
     asNumber(livestream.viewer_count) > 0
-  );
-}
-
-function getLivestream(data: AnyRecord) {
-  return (
-    data.livestream ||
-    data.live_stream ||
-    data.liveStream ||
-    data.current_livestream ||
-    data.current_stream ||
-    data.stream ||
-    data.broadcast ||
-    null
-  ) as AnyRecord | null;
-}
-
-function getChannelLive(data: AnyRecord, livestream: AnyRecord | null) {
-  return (
-    isTruthyLive(data.is_live) ||
-    isTruthyLive(data.live) ||
-    isTruthyLive(data.online) ||
-    isTruthyLive(data.status) ||
-    hasActiveLivestream(livestream)
   );
 }
 
 function normalizeOfficialChannel(channel: OfficialKickChannel): NormalizedKickChannel {
   const slug = cleanKickSlug(channel.slug);
-  const livestream = getLivestream(channel as AnyRecord);
-  const live = getChannelLive(channel as AnyRecord, livestream);
-  const category = livestream?.category || channel.category || {};
+  const stream = (getLivestream(channel as AnyRecord) || {}) as AnyRecord;
+  const category = stream.category || channel.category || {};
 
   return {
     slug,
     name: firstString(channel.user?.username, channel.slug, slug),
     url: `https://kick.com/${slug}`,
-    live,
-    title: firstString(livestream?.session_title, livestream?.title, channel.stream_title),
-    description: firstString(channel.channel_description),
+    live: isLiveChannel(channel as AnyRecord, stream),
+    title: firstString(stream.session_title, stream.title, channel.stream_title),
+    description: channel.channel_description || "",
     category: firstString(category?.name, category?.slug),
-    viewers: asNumber(livestream?.viewer_count),
-    thumbnail: firstImage(
-      livestream?.thumbnail?.url,
-      livestream?.thumbnail,
-      livestream?.thumbnail_url,
-      livestream?.banner_image,
-      channel.category?.thumbnail
-    ),
+    viewers: asNumber(stream.viewer_count || stream.viewers),
+    thumbnail: firstImage(stream.thumbnail?.url, stream.thumbnail, stream.thumbnail_url, stream.banner_image, channel.category?.thumbnail),
     avatar: firstImage(
       channel.profile_picture,
       channel.profile_pic,
@@ -250,15 +228,15 @@ function normalizeOfficialChannel(channel: OfficialKickChannel): NormalizedKickC
       channel.user?.image,
       channel.user?.image_url
     ),
-    banner: firstImage(channel.banner_picture, channel.banner_image),
+    banner: firstImage(channel.banner_picture),
     followers: asNumber(channel.followers_count || channel.followers),
-    started_at: firstString(livestream?.start_time, livestream?.started_at, livestream?.created_at),
+    started_at: firstString(stream.start_time, stream.started_at, stream.created_at),
     source: "official"
   };
 }
 
 function normalizePublicChannel(payload: AnyRecord, requestedSlug: string): NormalizedKickChannel {
-  const data = (payload?.data && typeof payload.data === "object") ? payload.data : payload;
+  const data = payload?.data && typeof payload.data === "object" ? payload.data : payload;
   const livestream = getLivestream(data);
   const user = data.user || data.owner || data.channel_user || {};
   const categories = Array.isArray(livestream?.categories) ? livestream.categories : [];
@@ -272,9 +250,8 @@ function normalizePublicChannel(payload: AnyRecord, requestedSlug: string): Norm
     data.cover_image?.url,
     data.cover_image,
     data.cover,
-    data.header_image,
-    data.offline_banner_image,
-    data.offline_banner_image?.url
+    data.offline_banner_image?.url,
+    data.offline_banner_image
   );
   const avatar = firstImage(
     user.profile_pic,
@@ -304,8 +281,8 @@ function normalizePublicChannel(payload: AnyRecord, requestedSlug: string): Norm
     livestream?.thumbnail?.url,
     livestream?.thumbnail,
     livestream?.thumbnail_url,
-    livestream?.banner_image,
     livestream?.banner_image?.url,
+    livestream?.banner_image,
     data.thumbnail?.url,
     data.thumbnail,
     data.thumbnail_url,
@@ -316,7 +293,7 @@ function normalizePublicChannel(payload: AnyRecord, requestedSlug: string): Norm
     slug,
     name: firstString(user.username, data.username, data.name, data.slug, slug),
     url: `https://kick.com/${slug}`,
-    live: getChannelLive(data, livestream),
+    live: isLiveChannel(data, livestream),
     title: firstString(livestream?.session_title, livestream?.title, data.stream_title),
     description: firstString(data.channel_description, data.description, data.bio),
     category: firstString(category?.name, category?.slug),
@@ -415,20 +392,6 @@ async function fetchOfficialBatch(slugs: string[]) {
   return map;
 }
 
-async function fetchPublicJson(url: string) {
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json, text/plain, */*",
-      "User-Agent": "Mozilla/5.0 LegionStreamers/1.0",
-      "Cache-Control": "no-cache"
-    },
-    cache: "no-store"
-  });
-
-  if (!res.ok) return null;
-  return await res.json().catch(() => null) as AnyRecord | null;
-}
-
 async function fetchPublicChannel(slug: string) {
   const encoded = encodeURIComponent(slug);
   const urls = [
@@ -438,11 +401,17 @@ async function fetchPublicChannel(slug: string) {
 
   for (const url of urls) {
     try {
-      const data = await fetchPublicJson(url);
+      const res = await fetch(url, {
+        headers: { Accept: "application/json, text/plain, */*" },
+        cache: "no-store"
+      });
+
+      if (!res.ok) continue;
+      const data = await res.json().catch(() => null) as AnyRecord | null;
       if (!data) continue;
 
       const normalized = normalizePublicChannel(data, slug);
-      if (normalized.slug) return normalized;
+      if (normalized.slug) return { ...normalized, slug, url: `https://kick.com/${slug}` };
     } catch {
       // Try the next public endpoint.
     }
@@ -460,10 +429,7 @@ async function fetchPublicChannels(slugs: string[]) {
 
     results.forEach((result, index) => {
       const requestedSlug = batch[index];
-      if (result?.slug) {
-        map.set(requestedSlug, { ...result, slug: requestedSlug, url: `https://kick.com/${requestedSlug}` });
-        map.set(result.slug, result);
-      }
+      if (result?.slug) map.set(requestedSlug, result);
     });
   }
 
