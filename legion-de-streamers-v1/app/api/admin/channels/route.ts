@@ -4,10 +4,12 @@ import { cleanKickSlug, extractKickSlugs } from "@/lib/kick";
 
 export const dynamic = "force-dynamic";
 
-const DELETE_MARKER_PREFIX = "deleted_";
-const FEATURED_MARKER_PREFIX = "featured_"; // marcador viejo: destacado ON
-const FEATURED_ON_PREFIX = "fo_"; // marcador nuevo: destacado ON, no depende de DELETE
-const FEATURED_OFF_PREFIX = "fx_"; // marcador nuevo: destacado OFF, no depende de DELETE
+const LEGACY_DELETE_PREFIX = "deleted_";
+const DELETE_ON_PREFIX = "dx_";
+const DELETE_OFF_PREFIX = "rx_";
+const FEATURED_MARKER_PREFIX = "featured_";
+const FEATURED_ON_PREFIX = "fo_";
+const FEATURED_OFF_PREFIX = "fx_";
 const MAX_SLUG_LENGTH = 80;
 
 type ChannelRow = {
@@ -22,6 +24,11 @@ type AdminChannel = ChannelRow & {
 type AddResult = {
   added: string[];
   duplicates: string[];
+};
+
+type StateMarker = {
+  target: string;
+  active: boolean;
 };
 
 type FeatureMarker = {
@@ -99,11 +106,21 @@ function unique(values: string[]) {
 }
 
 function markerTimestamp() {
-  return Date.now().toString(36);
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function deletionMarkerFor(slug: string) {
-  return `${DELETE_MARKER_PREFIX}${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
+function stateTargetFromTimedMarker(slug: string) {
+  const parts = cleanStoredSlug(slug).split("_");
+  return parts.slice(2).join("_");
+}
+
+function legacyDeletionMarkerFor(slug: string) {
+  return `${LEGACY_DELETE_PREFIX}${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
+}
+
+function deleteStateMarkerFor(slug: string, active: boolean) {
+  const prefix = active ? DELETE_ON_PREFIX : DELETE_OFF_PREFIX;
+  return `${prefix}${markerTimestamp()}_${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
 }
 
 function legacyFeaturedMarkerFor(slug: string) {
@@ -115,14 +132,20 @@ function featuredMarkerFor(slug: string, featured: boolean) {
   return `${prefix}${markerTimestamp()}_${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
 }
 
-function isDeletionMarker(slug: string) {
-  return cleanStoredSlug(slug).startsWith(DELETE_MARKER_PREFIX);
-}
-
-function deletionTargetFromMarker(slug: string) {
+function getDeleteMarker(slug: string): StateMarker | null {
   const clean = cleanStoredSlug(slug);
-  if (!isDeletionMarker(clean)) return "";
-  return clean.slice(DELETE_MARKER_PREFIX.length);
+
+  if (clean.startsWith(LEGACY_DELETE_PREFIX)) {
+    const target = clean.slice(LEGACY_DELETE_PREFIX.length);
+    return target ? { target, active: true } : null;
+  }
+
+  if (clean.startsWith(DELETE_ON_PREFIX) || clean.startsWith(DELETE_OFF_PREFIX)) {
+    const target = stateTargetFromTimedMarker(clean);
+    return target ? { target, active: clean.startsWith(DELETE_ON_PREFIX) } : null;
+  }
+
+  return null;
 }
 
 function getFeatureMarker(slug: string): FeatureMarker | null {
@@ -134,13 +157,15 @@ function getFeatureMarker(slug: string): FeatureMarker | null {
   }
 
   if (clean.startsWith(FEATURED_ON_PREFIX) || clean.startsWith(FEATURED_OFF_PREFIX)) {
-    const featured = clean.startsWith(FEATURED_ON_PREFIX);
-    const parts = clean.split("_");
-    const target = parts.slice(2).join("_");
-    return target ? { target, featured } : null;
+    const target = stateTargetFromTimedMarker(clean);
+    return target ? { target, featured: clean.startsWith(FEATURED_ON_PREFIX) } : null;
   }
 
   return null;
+}
+
+function isDeletionMarker(slug: string) {
+  return Boolean(getDeleteMarker(slug));
 }
 
 function isFeaturedMarker(slug: string) {
@@ -157,7 +182,7 @@ function markerOrder(row: ChannelRow, index: number, total: number) {
 }
 
 function splitRows(rows: ChannelRow[]) {
-  const deleted = new Set<string>();
+  const deleteState = new Map<string, { active: boolean; order: number }>();
   const featuredState = new Map<string, { featured: boolean; order: number }>();
   const visibleRows: ChannelRow[] = [];
 
@@ -165,9 +190,13 @@ function splitRows(rows: ChannelRow[]) {
     const slug = cleanStoredSlug(row.slug);
     if (!slug) return;
 
-    if (isDeletionMarker(slug)) {
-      const target = deletionTargetFromMarker(slug);
-      if (target) deleted.add(target);
+    const deleteMarker = getDeleteMarker(slug);
+    if (deleteMarker) {
+      const order = markerOrder(row, index, rows.length);
+      const current = deleteState.get(deleteMarker.target);
+      if (!current || order >= current.order) {
+        deleteState.set(deleteMarker.target, { active: deleteMarker.active, order });
+      }
       return;
     }
 
@@ -183,6 +212,12 @@ function splitRows(rows: ChannelRow[]) {
 
     visibleRows.push({ slug, created_at: row.created_at });
   });
+
+  const deleted = new Set(
+    [...deleteState.entries()]
+      .filter(([, state]) => state.active)
+      .map(([slug]) => slug)
+  );
 
   const channels: AdminChannel[] = visibleRows
     .filter((row) => !deleted.has(row.slug.toLowerCase()))
@@ -273,16 +308,16 @@ async function deleteMarker(marker: string) {
   return !result.error;
 }
 
-async function removeDeletionMarker(slug: string) {
-  return deleteMarker(deletionMarkerFor(slug));
+async function removeLegacyDeletionMarker(slug: string) {
+  return deleteMarker(legacyDeletionMarkerFor(slug));
 }
 
 async function removeLegacyFeaturedMarker(slug: string) {
   return deleteMarker(legacyFeaturedMarkerFor(slug));
 }
 
-async function recordDeletedSlug(slug: string) {
-  const marker = deletionMarkerFor(slug);
+async function recordDeletedState(slug: string, active: boolean) {
+  const marker = deleteStateMarkerFor(slug, active);
 
   try {
     await insertRows([marker]);
@@ -316,11 +351,7 @@ async function setFeaturedSlug(slug: string, featured: boolean) {
     return { ok: false as const, code: "not_found" as const };
   }
 
-  // No dependemos de DELETE porque en algunas instalaciones Supabase/RLS lo bloquea.
-  // Cada cambio crea un marcador nuevo y el más reciente gana.
   await recordFeaturedState(clean, featured);
-
-  // Limpieza opcional del marcador viejo fijo; si Supabase bloquea DELETE, no afecta.
   if (!featured) await removeLegacyFeaturedMarker(clean);
 
   return { ok: true as const };
@@ -330,23 +361,33 @@ async function addChannels(slugs: string[]): Promise<AddResult> {
   const cleanSlugs = unique(slugs).filter((slug) => !isSystemMarker(slug));
   if (!cleanSlugs.length) return { added: [], duplicates: [] };
 
-  await Promise.all(cleanSlugs.map((slug) => removeDeletionMarker(slug)));
+  const before = splitRows(await readRawRows());
+  const beforeStored = new Set(before.channels.map((row) => row.slug.toLowerCase()));
+  const toRestore = cleanSlugs.filter((slug) => before.deleted.has(slug));
+
+  if (toRestore.length) {
+    await Promise.all(toRestore.map((slug) => recordDeletedState(slug, false)));
+    await Promise.all(toRestore.map((slug) => removeLegacyDeletionMarker(slug)));
+  }
 
   const existing = await findExistingChannels(cleanSlugs);
-  const duplicates = cleanSlugs.filter((slug) => existing.has(slug));
+  const duplicates = cleanSlugs.filter((slug) => existing.has(slug) && !toRestore.includes(slug));
   const toAdd = cleanSlugs.filter((slug) => !existing.has(slug));
 
-  if (!toAdd.length) return { added: [], duplicates };
+  if (!toAdd.length) return { added: unique(toRestore), duplicates };
 
   try {
     await insertRows(toAdd);
-    return { added: toAdd, duplicates };
+    return { added: unique([...toRestore, ...toAdd]), duplicates };
   } catch (error) {
     if (isDuplicateError(error)) {
       const visible = await findExistingChannels(cleanSlugs);
       return {
-        added: cleanSlugs.filter((slug) => visible.has(slug) && !existing.has(slug)),
-        duplicates: cleanSlugs.filter((slug) => visible.has(slug) && existing.has(slug))
+        added: unique([
+          ...toRestore,
+          ...cleanSlugs.filter((slug) => visible.has(slug) && !beforeStored.has(slug))
+        ]),
+        duplicates: cleanSlugs.filter((slug) => visible.has(slug) && beforeStored.has(slug) && !toRestore.includes(slug))
       };
     }
 
@@ -359,7 +400,7 @@ async function deleteSlug(slug: string) {
 
   await recordFeaturedState(slug, false);
   await removeLegacyFeaturedMarker(slug);
-  await recordDeletedSlug(slug);
+  await recordDeletedState(slug, true);
 
   const first = await supabase
     .from("channels")
@@ -382,7 +423,8 @@ async function updateSlug(oldSlug: string, newSlug: string) {
   if (newExists) return { ok: false as const, code: "duplicate" as const };
 
   const wasFeatured = await channelIsFeatured(oldSlug);
-  await removeDeletionMarker(newSlug);
+  await recordDeletedState(newSlug, false);
+  await removeLegacyDeletionMarker(newSlug);
 
   const update = await supabase
     .from("channels")
@@ -398,7 +440,7 @@ async function updateSlug(oldSlug: string, newSlug: string) {
 
   const changed = await slugExists(newSlug);
   if (changed) {
-    await recordDeletedSlug(oldSlug);
+    await recordDeletedState(oldSlug, true);
     await recordFeaturedState(oldSlug, false);
     await removeLegacyFeaturedMarker(oldSlug);
     if (wasFeatured) await setFeaturedSlug(newSlug, true);
