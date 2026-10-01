@@ -5,7 +5,9 @@ import { cleanKickSlug, extractKickSlugs } from "@/lib/kick";
 export const dynamic = "force-dynamic";
 
 const DELETE_MARKER_PREFIX = "deleted_";
-const FEATURED_MARKER_PREFIX = "featured_";
+const FEATURED_MARKER_PREFIX = "featured_"; // marcador viejo: destacado ON
+const FEATURED_ON_PREFIX = "fo_"; // marcador nuevo: destacado ON, no depende de DELETE
+const FEATURED_OFF_PREFIX = "fx_"; // marcador nuevo: destacado OFF, no depende de DELETE
 const MAX_SLUG_LENGTH = 80;
 
 type ChannelRow = {
@@ -20,6 +22,11 @@ type AdminChannel = ChannelRow & {
 type AddResult = {
   added: string[];
   duplicates: string[];
+};
+
+type FeatureMarker = {
+  target: string;
+  featured: boolean;
 };
 
 function getAdminSecret() {
@@ -91,24 +98,25 @@ function unique(values: string[]) {
   return [...new Set(values.map(cleanStoredSlug).filter(Boolean))];
 }
 
+function markerTimestamp() {
+  return Date.now().toString(36);
+}
+
 function deletionMarkerFor(slug: string) {
   return `${DELETE_MARKER_PREFIX}${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
 }
 
-function featuredMarkerFor(slug: string) {
+function legacyFeaturedMarkerFor(slug: string) {
   return `${FEATURED_MARKER_PREFIX}${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
+}
+
+function featuredMarkerFor(slug: string, featured: boolean) {
+  const prefix = featured ? FEATURED_ON_PREFIX : FEATURED_OFF_PREFIX;
+  return `${prefix}${markerTimestamp()}_${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
 }
 
 function isDeletionMarker(slug: string) {
   return cleanStoredSlug(slug).startsWith(DELETE_MARKER_PREFIX);
-}
-
-function isFeaturedMarker(slug: string) {
-  return cleanStoredSlug(slug).startsWith(FEATURED_MARKER_PREFIX);
-}
-
-function isSystemMarker(slug: string) {
-  return isDeletionMarker(slug) || isFeaturedMarker(slug);
 }
 
 function deletionTargetFromMarker(slug: string) {
@@ -117,44 +125,73 @@ function deletionTargetFromMarker(slug: string) {
   return clean.slice(DELETE_MARKER_PREFIX.length);
 }
 
-function featuredTargetFromMarker(slug: string) {
+function getFeatureMarker(slug: string): FeatureMarker | null {
   const clean = cleanStoredSlug(slug);
-  if (!isFeaturedMarker(clean)) return "";
-  return clean.slice(FEATURED_MARKER_PREFIX.length);
+
+  if (clean.startsWith(FEATURED_MARKER_PREFIX)) {
+    const target = clean.slice(FEATURED_MARKER_PREFIX.length);
+    return target ? { target, featured: true } : null;
+  }
+
+  if (clean.startsWith(FEATURED_ON_PREFIX) || clean.startsWith(FEATURED_OFF_PREFIX)) {
+    const featured = clean.startsWith(FEATURED_ON_PREFIX);
+    const parts = clean.split("_");
+    const target = parts.slice(2).join("_");
+    return target ? { target, featured } : null;
+  }
+
+  return null;
+}
+
+function isFeaturedMarker(slug: string) {
+  return Boolean(getFeatureMarker(slug));
+}
+
+function isSystemMarker(slug: string) {
+  return isDeletionMarker(slug) || isFeaturedMarker(slug);
+}
+
+function markerOrder(row: ChannelRow, index: number, total: number) {
+  const parsed = row.created_at ? Date.parse(row.created_at) : 0;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : total - index;
 }
 
 function splitRows(rows: ChannelRow[]) {
   const deleted = new Set<string>();
-  const featured = new Set<string>();
+  const featuredState = new Map<string, { featured: boolean; order: number }>();
   const visibleRows: ChannelRow[] = [];
 
-  for (const row of rows) {
+  rows.forEach((row, index) => {
     const slug = cleanStoredSlug(row.slug);
-    if (!slug) continue;
+    if (!slug) return;
 
     if (isDeletionMarker(slug)) {
       const target = deletionTargetFromMarker(slug);
       if (target) deleted.add(target);
-      continue;
+      return;
     }
 
-    if (isFeaturedMarker(slug)) {
-      const target = featuredTargetFromMarker(slug);
-      if (target) featured.add(target);
-      continue;
+    const featureMarker = getFeatureMarker(slug);
+    if (featureMarker) {
+      const order = markerOrder(row, index, rows.length);
+      const current = featuredState.get(featureMarker.target);
+      if (!current || order >= current.order) {
+        featuredState.set(featureMarker.target, { featured: featureMarker.featured, order });
+      }
+      return;
     }
 
     visibleRows.push({ slug, created_at: row.created_at });
-  }
+  });
 
   const channels: AdminChannel[] = visibleRows
     .filter((row) => !deleted.has(row.slug.toLowerCase()))
     .map((row) => ({
       ...row,
-      featured: featured.has(row.slug.toLowerCase())
+      featured: featuredState.get(row.slug.toLowerCase())?.featured === true
     }));
 
-  return { deleted, featured, channels };
+  return { deleted, featuredState, channels };
 }
 
 function parseBodySlugs(body: Record<string, unknown>) {
@@ -240,12 +277,24 @@ async function removeDeletionMarker(slug: string) {
   return deleteMarker(deletionMarkerFor(slug));
 }
 
-async function removeFeaturedMarker(slug: string) {
-  return deleteMarker(featuredMarkerFor(slug));
+async function removeLegacyFeaturedMarker(slug: string) {
+  return deleteMarker(legacyFeaturedMarkerFor(slug));
 }
 
 async function recordDeletedSlug(slug: string) {
   const marker = deletionMarkerFor(slug);
+
+  try {
+    await insertRows([marker]);
+    return true;
+  } catch (error) {
+    if (isDuplicateError(error)) return true;
+    throw error;
+  }
+}
+
+async function recordFeaturedState(slug: string, featured: boolean) {
+  const marker = featuredMarkerFor(slug, featured);
 
   try {
     await insertRows([marker]);
@@ -267,15 +316,12 @@ async function setFeaturedSlug(slug: string, featured: boolean) {
     return { ok: false as const, code: "not_found" as const };
   }
 
-  if (featured) {
-    try {
-      await insertRows([featuredMarkerFor(clean)]);
-    } catch (error) {
-      if (!isDuplicateError(error)) throw error;
-    }
-  } else {
-    await removeFeaturedMarker(clean);
-  }
+  // No dependemos de DELETE porque en algunas instalaciones Supabase/RLS lo bloquea.
+  // Cada cambio crea un marcador nuevo y el más reciente gana.
+  await recordFeaturedState(clean, featured);
+
+  // Limpieza opcional del marcador viejo fijo; si Supabase bloquea DELETE, no afecta.
+  if (!featured) await removeLegacyFeaturedMarker(clean);
 
   return { ok: true as const };
 }
@@ -311,7 +357,8 @@ async function addChannels(slugs: string[]): Promise<AddResult> {
 async function deleteSlug(slug: string) {
   const supabase = getSupabaseAdmin();
 
-  await removeFeaturedMarker(slug);
+  await recordFeaturedState(slug, false);
+  await removeLegacyFeaturedMarker(slug);
   await recordDeletedSlug(slug);
 
   const first = await supabase
@@ -352,7 +399,8 @@ async function updateSlug(oldSlug: string, newSlug: string) {
   const changed = await slugExists(newSlug);
   if (changed) {
     await recordDeletedSlug(oldSlug);
-    await removeFeaturedMarker(oldSlug);
+    await recordFeaturedState(oldSlug, false);
+    await removeLegacyFeaturedMarker(oldSlug);
     if (wasFeatured) await setFeaturedSlug(newSlug, true);
     return { ok: true as const, mode: "updated" as const };
   }
