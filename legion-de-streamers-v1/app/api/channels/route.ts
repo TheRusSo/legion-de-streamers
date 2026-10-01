@@ -11,7 +11,9 @@ export const dynamic = "force-dynamic";
 
 const DEFAULT_FEATURED_CHANNEL = "soyelmoro";
 const DELETE_MARKER_PREFIX = "deleted_";
-const FEATURED_MARKER_PREFIX = "featured_";
+const FEATURED_MARKER_PREFIX = "featured_"; // marcador viejo: destacado ON
+const FEATURED_ON_PREFIX = "fo_"; // marcador nuevo: destacado ON
+const FEATURED_OFF_PREFIX = "fx_"; // marcador nuevo: destacado OFF
 const MAX_SLUG_LENGTH = 80;
 
 type ChannelRow = {
@@ -23,6 +25,11 @@ type ChannelRow = {
 type AddResult = {
   added: string[];
   duplicates: string[];
+};
+
+type FeatureMarker = {
+  target: string;
+  featured: boolean;
 };
 
 function nowIso() {
@@ -64,56 +71,80 @@ function isDeletionMarker(slug: string) {
   return cleanStoredSlug(slug).startsWith(DELETE_MARKER_PREFIX);
 }
 
-function isFeaturedMarker(slug: string) {
-  return cleanStoredSlug(slug).startsWith(FEATURED_MARKER_PREFIX);
-}
-
-function isSystemMarker(slug: string) {
-  return isDeletionMarker(slug) || isFeaturedMarker(slug);
-}
-
 function deletionTargetFromMarker(slug: string) {
   const clean = cleanStoredSlug(slug);
   if (!isDeletionMarker(clean)) return "";
   return clean.slice(DELETE_MARKER_PREFIX.length);
 }
 
-function featuredTargetFromMarker(slug: string) {
+function getFeatureMarker(slug: string): FeatureMarker | null {
   const clean = cleanStoredSlug(slug);
-  if (!isFeaturedMarker(clean)) return "";
-  return clean.slice(FEATURED_MARKER_PREFIX.length);
+
+  if (clean.startsWith(FEATURED_MARKER_PREFIX)) {
+    const target = clean.slice(FEATURED_MARKER_PREFIX.length);
+    return target ? { target, featured: true } : null;
+  }
+
+  if (clean.startsWith(FEATURED_ON_PREFIX) || clean.startsWith(FEATURED_OFF_PREFIX)) {
+    const featured = clean.startsWith(FEATURED_ON_PREFIX);
+    const parts = clean.split("_");
+    const target = parts.slice(2).join("_");
+    return target ? { target, featured } : null;
+  }
+
+  return null;
+}
+
+function isFeaturedMarker(slug: string) {
+  return Boolean(getFeatureMarker(slug));
+}
+
+function isSystemMarker(slug: string) {
+  return isDeletionMarker(slug) || isFeaturedMarker(slug);
+}
+
+function markerOrder(row: ChannelRow, index: number, total: number) {
+  const parsed = row.created_at ? Date.parse(row.created_at) : 0;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : total - index;
 }
 
 function splitVisibleRows(rows: ChannelRow[]) {
   const deleted = new Set<string>();
-  const featured = new Set<string>();
+  const featuredState = new Map<string, { featured: boolean; order: number }>();
   const visibleRows: ChannelRow[] = [];
 
-  for (const row of rows) {
+  rows.forEach((row, index) => {
     const slug = cleanStoredSlug(row.slug);
-    if (!slug) continue;
+    if (!slug) return;
 
     if (isDeletionMarker(slug)) {
       const target = deletionTargetFromMarker(slug);
       if (target) deleted.add(target);
-      continue;
+      return;
     }
 
-    if (isFeaturedMarker(slug)) {
-      const target = featuredTargetFromMarker(slug);
-      if (target) featured.add(target);
-      continue;
+    const featureMarker = getFeatureMarker(slug);
+    if (featureMarker) {
+      const order = markerOrder(row, index, rows.length);
+      const current = featuredState.get(featureMarker.target);
+      if (!current || order >= current.order) {
+        featuredState.set(featureMarker.target, { featured: featureMarker.featured, order });
+      }
+      return;
     }
 
     visibleRows.push({ slug, created_at: row.created_at, featured: false });
-  }
+  });
 
   return {
     deleted,
-    featured,
+    featuredState,
     visibleRows: visibleRows
       .filter((row) => !deleted.has(row.slug.toLowerCase()))
-      .map((row) => ({ ...row, featured: featured.has(row.slug.toLowerCase()) }))
+      .map((row) => ({
+        ...row,
+        featured: featuredState.get(row.slug.toLowerCase())?.featured === true
+      }))
   };
 }
 
