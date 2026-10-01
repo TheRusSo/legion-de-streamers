@@ -396,7 +396,7 @@ export default function Page() {
             </div>
             <div>
               <h2>{featuredChannel?.name || "SoyelMoro"}</h2>
-              <p>@{featuredChannel?.slug || MAIN_CHANNEL} {featuredChannel?.featured ? "• ⭐ Destacado por admin" : ""}</p>
+              <p>@{featuredChannel?.slug || MAIN_CHANNEL}</p>
               <div className="tagRow">
                 <span>{featuredChannel?.category || "KICK"}</span>
                 <span>{featuredChannel?.live ? `${featuredChannel.viewers || 0} viewers` : "Comunidad"}</span>
@@ -428,7 +428,6 @@ export default function Page() {
         <article className="membersBox">
           <span className="cardLabel">DESTACADOS</span>
           <b>{featuredChannels.length || 1}</b>
-          <p>Canales resaltados desde el panel admin</p>
           <a href="#directorio">Ver toda la comunidad →</a>
         </article>
       </section>
