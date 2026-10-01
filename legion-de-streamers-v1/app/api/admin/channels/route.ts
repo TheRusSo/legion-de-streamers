@@ -5,11 +5,16 @@ import { cleanKickSlug, extractKickSlugs } from "@/lib/kick";
 export const dynamic = "force-dynamic";
 
 const DELETE_MARKER_PREFIX = "deleted_";
+const FEATURED_MARKER_PREFIX = "featured_";
 const MAX_SLUG_LENGTH = 80;
 
 type ChannelRow = {
   slug: string;
   created_at?: string;
+};
+
+type AdminChannel = ChannelRow & {
+  featured?: boolean;
 };
 
 type AddResult = {
@@ -90,8 +95,20 @@ function deletionMarkerFor(slug: string) {
   return `${DELETE_MARKER_PREFIX}${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
 }
 
+function featuredMarkerFor(slug: string) {
+  return `${FEATURED_MARKER_PREFIX}${cleanStoredSlug(slug)}`.slice(0, MAX_SLUG_LENGTH);
+}
+
 function isDeletionMarker(slug: string) {
   return cleanStoredSlug(slug).startsWith(DELETE_MARKER_PREFIX);
+}
+
+function isFeaturedMarker(slug: string) {
+  return cleanStoredSlug(slug).startsWith(FEATURED_MARKER_PREFIX);
+}
+
+function isSystemMarker(slug: string) {
+  return isDeletionMarker(slug) || isFeaturedMarker(slug);
 }
 
 function deletionTargetFromMarker(slug: string) {
@@ -100,8 +117,15 @@ function deletionTargetFromMarker(slug: string) {
   return clean.slice(DELETE_MARKER_PREFIX.length);
 }
 
-function splitVisibleRows(rows: ChannelRow[]) {
+function featuredTargetFromMarker(slug: string) {
+  const clean = cleanStoredSlug(slug);
+  if (!isFeaturedMarker(clean)) return "";
+  return clean.slice(FEATURED_MARKER_PREFIX.length);
+}
+
+function splitRows(rows: ChannelRow[]) {
   const deleted = new Set<string>();
+  const featured = new Set<string>();
   const visibleRows: ChannelRow[] = [];
 
   for (const row of rows) {
@@ -114,13 +138,23 @@ function splitVisibleRows(rows: ChannelRow[]) {
       continue;
     }
 
+    if (isFeaturedMarker(slug)) {
+      const target = featuredTargetFromMarker(slug);
+      if (target) featured.add(target);
+      continue;
+    }
+
     visibleRows.push({ slug, created_at: row.created_at });
   }
 
-  return {
-    deleted,
-    visibleRows: visibleRows.filter((row) => !deleted.has(row.slug.toLowerCase()))
-  };
+  const channels: AdminChannel[] = visibleRows
+    .filter((row) => !deleted.has(row.slug.toLowerCase()))
+    .map((row) => ({
+      ...row,
+      featured: featured.has(row.slug.toLowerCase())
+    }));
+
+  return { deleted, featured, channels };
 }
 
 function parseBodySlugs(body: Record<string, unknown>) {
@@ -159,13 +193,17 @@ async function readRawRows() {
 }
 
 async function readAdminRows() {
-  const { visibleRows } = splitVisibleRows(await readRawRows());
-  return visibleRows;
+  return splitRows(await readRawRows()).channels;
 }
 
 async function slugExists(slug: string) {
   const rows = await readAdminRows();
   return rows.some((row) => row.slug.toLowerCase() === slug.toLowerCase());
+}
+
+async function channelIsFeatured(slug: string) {
+  const rows = await readAdminRows();
+  return rows.some((row) => row.slug.toLowerCase() === slug.toLowerCase() && row.featured);
 }
 
 async function findExistingChannels(slugs: string[]) {
@@ -192,22 +230,18 @@ async function insertRows(slugs: string[]) {
   if (second.error) throw second.error;
 }
 
-async function removeDeletionMarker(slug: string) {
+async function deleteMarker(marker: string) {
   const supabase = getSupabaseAdmin();
-  const marker = deletionMarkerFor(slug);
+  const result = await supabase.from("channels").delete().eq("slug", marker);
+  return !result.error;
+}
 
-  const result = await supabase
-    .from("channels")
-    .delete()
-    .eq("slug", marker);
+async function removeDeletionMarker(slug: string) {
+  return deleteMarker(deletionMarkerFor(slug));
+}
 
-  if (result.error) {
-    // Si la key de Vercel es anon y no service_role, Supabase puede bloquear DELETE.
-    // No detenemos la acción: los INSERT siguen funcionando por la policy pública.
-    return false;
-  }
-
-  return true;
+async function removeFeaturedMarker(slug: string) {
+  return deleteMarker(featuredMarkerFor(slug));
 }
 
 async function recordDeletedSlug(slug: string) {
@@ -222,11 +256,34 @@ async function recordDeletedSlug(slug: string) {
   }
 }
 
+async function setFeaturedSlug(slug: string, featured: boolean) {
+  const clean = cleanStoredSlug(slug);
+  if (!clean || isSystemMarker(clean)) {
+    return { ok: false as const, code: "invalid" as const };
+  }
+
+  const exists = await slugExists(clean);
+  if (!exists) {
+    return { ok: false as const, code: "not_found" as const };
+  }
+
+  if (featured) {
+    try {
+      await insertRows([featuredMarkerFor(clean)]);
+    } catch (error) {
+      if (!isDuplicateError(error)) throw error;
+    }
+  } else {
+    await removeFeaturedMarker(clean);
+  }
+
+  return { ok: true as const };
+}
+
 async function addChannels(slugs: string[]): Promise<AddResult> {
-  const cleanSlugs = unique(slugs).filter((slug) => !isDeletionMarker(slug));
+  const cleanSlugs = unique(slugs).filter((slug) => !isSystemMarker(slug));
   if (!cleanSlugs.length) return { added: [], duplicates: [] };
 
-  // Si un canal fue eliminado antes, intentamos desbloquearlo antes de agregarlo otra vez.
   await Promise.all(cleanSlugs.map((slug) => removeDeletionMarker(slug)));
 
   const existing = await findExistingChannels(cleanSlugs);
@@ -254,20 +311,15 @@ async function addChannels(slugs: string[]): Promise<AddResult> {
 async function deleteSlug(slug: string) {
   const supabase = getSupabaseAdmin();
 
-  // Paso 1: crear una marca persistente de eliminación. Esto funciona incluso si la key es anon,
-  // porque la tabla permite INSERT público. La página pública filtrará este canal por esa marca.
+  await removeFeaturedMarker(slug);
   await recordDeletedSlug(slug);
 
-  // Paso 2: intentar borrar la fila real. Si la key no es service_role, Supabase puede bloquearlo.
-  // La marca anterior evita que el canal reaparezca aunque la fila real siga existiendo.
   const first = await supabase
     .from("channels")
     .delete()
     .ilike("slug", slug);
 
-  if (first.error) {
-    return false;
-  }
+  if (first.error) return false;
 
   const stillVisible = await slugExists(slug);
   return !stillVisible;
@@ -277,15 +329,12 @@ async function updateSlug(oldSlug: string, newSlug: string) {
   const supabase = getSupabaseAdmin();
 
   const exists = await slugExists(oldSlug);
-  if (!exists) {
-    return { ok: false as const, code: "not_found" as const };
-  }
+  if (!exists) return { ok: false as const, code: "not_found" as const };
 
   const newExists = await slugExists(newSlug);
-  if (newExists) {
-    return { ok: false as const, code: "duplicate" as const };
-  }
+  if (newExists) return { ok: false as const, code: "duplicate" as const };
 
+  const wasFeatured = await channelIsFeatured(oldSlug);
   await removeDeletionMarker(newSlug);
 
   const update = await supabase
@@ -294,20 +343,23 @@ async function updateSlug(oldSlug: string, newSlug: string) {
     .ilike("slug", oldSlug);
 
   if (update.error) {
-    // Fallback para cuando UPDATE está bloqueado por RLS: inserta el nuevo y marca el anterior como eliminado.
     await insertRows([newSlug]);
     await deleteSlug(oldSlug);
+    if (wasFeatured) await setFeaturedSlug(newSlug, true);
     return { ok: true as const, mode: "recreated" as const };
   }
 
   const changed = await slugExists(newSlug);
   if (changed) {
     await recordDeletedSlug(oldSlug);
+    await removeFeaturedMarker(oldSlug);
+    if (wasFeatured) await setFeaturedSlug(newSlug, true);
     return { ok: true as const, mode: "updated" as const };
   }
 
   await insertRows([newSlug]);
   await deleteSlug(oldSlug);
+  if (wasFeatured) await setFeaturedSlug(newSlug, true);
 
   return { ok: true as const, mode: "recreated" as const };
 }
@@ -383,6 +435,51 @@ export async function PATCH(req: NextRequest) {
   if (blocked) return blocked;
 
   const body = await readBody(req);
+  const action = String(body.action || "").toLowerCase();
+  const targetSlug = cleanStoredSlug(String(body.slug || body.channel || ""));
+
+  if (action === "featured" || typeof body.featured === "boolean") {
+    if (!targetSlug) {
+      return NextResponse.json(
+        { ok: false, code: "invalid", error: "Usuario de KICK requerido." },
+        { status: 400 }
+      );
+    }
+
+    try {
+      const result = await setFeaturedSlug(targetSlug, Boolean(body.featured));
+
+      if (!result.ok && result.code === "not_found") {
+        const channels = await readAdminRows();
+        return NextResponse.json(
+          { ok: false, code: "not_found", error: `El canal @${targetSlug} no existe en la base de datos.`, channels, total: channels.length },
+          { status: 404 }
+        );
+      }
+
+      if (!result.ok) {
+        return NextResponse.json(
+          { ok: false, code: "invalid", error: "No se pudo cambiar el destacado." },
+          { status: 400 }
+        );
+      }
+
+      const channels = await readAdminRows();
+      return NextResponse.json({
+        ok: true,
+        featured: Boolean(body.featured),
+        slug: targetSlug,
+        total: channels.length,
+        channels
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { ok: false, code: "storage_error", error: getErrorMessage(error) },
+        { status: 500 }
+      );
+    }
+  }
+
   const oldSlug = cleanStoredSlug(String(body.oldSlug || body.slug || ""));
   const newSlug = cleanStoredSlug(String(body.newSlug || body.newUrl || body.channel || ""));
 
