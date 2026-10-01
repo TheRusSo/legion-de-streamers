@@ -148,21 +148,6 @@ function formatList(values: string[]) {
   return values.slice(0, 5).map((v) => `@${v}`).join(", ") + (values.length > 5 ? "..." : "");
 }
 
-function channelImage(channel?: Channel) {
-  return originalCover(channel) || originalAvatar(channel);
-}
-
-function channelLabel(channel?: Channel) {
-  if (!channel) return "Variedad";
-  return channel.category || channel.title || "Variedad";
-}
-
-function shortNumber(value?: number) {
-  const number = value || 0;
-  if (number >= 1000) return `${(number / 1000).toFixed(number >= 10000 ? 0 : 1)}K`;
-  return String(number);
-}
-
 export default function Page() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [input, setInput] = useState("");
@@ -284,13 +269,13 @@ export default function Page() {
 
   const liveChannels = channels.filter((channel) => channel.live);
   const liveCount = liveChannels.length;
-  const featuredChannel = channels.find((channel) => channel.slug.toLowerCase() === MAIN_CHANNEL) || liveChannels[0] || channels[0];
-  const featuredImage = channelImage(featuredChannel);
-  const activeDisplay = liveChannels.slice(0, 5);
-  const topChannels = [...channels]
-    .sort((a, b) => (b.viewers || 0) - (a.viewers || 0) || (b.followers || 0) - (a.followers || 0))
+  const offlineCount = channels.length - liveCount;
+  const featuredChannel = channels.find((channel) => channel.slug.toLowerCase() === MAIN_CHANNEL) || channels[0];
+  const featuredCoverImage = originalCover(featuredChannel);
+  const featuredAvatarImage = originalAvatar(featuredChannel);
+  const recentChannels = [...channels]
+    .sort((a, b) => Number(b.live) - Number(a.live) || (b.viewers || 0) - (a.viewers || 0) || a.name.localeCompare(b.name))
     .slice(0, 5);
-  const categories = [...new Set(channels.map((channel) => channel.category).filter(Boolean) as string[])].slice(0, 7);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -308,218 +293,188 @@ export default function Page() {
   }, [channels, search, tab]);
 
   return (
-    <main className="streamPage">
-      <nav className="siteNav">
-        <a className="brandMark" href="#top" aria-label="Legión de Streamers">
-          <span>♛</span>
-          <strong>LEGIÓN <small>DE STREAMERS</small></strong>
-        </a>
-
-        <div className="navMenu">
-          <a href="#top">Inicio</a>
-          <a href="#directorio">Streamers</a>
-          <a href="#comunidad">Comunidad</a>
-          <a href="#eventos">Eventos</a>
+    <main>
+      <nav className="topNav">
+        <a className="brand" href="#top" aria-label="Legión de Streamers" />
+        <div className="navCenter">
+          <a href="#top" className="active">Inicio</a>
+          <a href="#directorio">Canales</a>
+          <a href={DISCORD_URL} target="_blank" rel="noreferrer">Comunidad</a>
         </div>
-
-        <div className="navRight">
-          <div className="onlineDot"><i /> {channels.length || 0} canales</div>
-          <button className="navIcon" aria-label="Buscar">⌕</button>
+        <div className="navActions">
           <a className="discordPill" href={DISCORD_URL} target="_blank" rel="noreferrer">Discord</a>
+          <a className="outlinePill" href="#directorio">Explorar</a>
         </div>
       </nav>
 
-      <section id="top" className="heroV2">
-        <div className="heroCopy">
-          <div className="breadcrumbs">STREAMERS <span>›</span> COMUNIDAD <span>›</span> SIN LÍMITES</div>
-          <h1>Juntos hacemos <em>más grande</em></h1>
+      <section id="top" className="heroPro">
+        <div className="heroText">
+          <span className="eyebrow">STREAMERS • COMUNIDAD • KICK</span>
+          <h1>Juntos hacemos <em>más grande</em> la Legión.</h1>
           <p>
-            Una comunidad de streamers, para streamers. Juega, comparte, conecta y haz crecer tu canal dentro de la Legión.
+            Una comunidad para descubrir streamers, apoyar canales en vivo y conectar con nuevos talentos.
           </p>
-          <div className="heroActions">
-            <a className="primaryBtn" href={DISCORD_URL} target="_blank" rel="noreferrer">Únete a la comunidad</a>
-            <a className="secondaryBtn" href="#directorio">Conoce más</a>
+          <div className="heroButtons">
+            <a className="primaryButton" href={DISCORD_URL} target="_blank" rel="noreferrer">Únete a la comunidad</a>
+            <a className="ghostButton" href="#directorio">Ver canales</a>
           </div>
         </div>
 
-        <div className="heroPanel addChannelPanel">
-          <div className="panelTitle">
-            <span className="kickBadge">K</span>
+        <div className="heroSide">
+          <form className="addPanel" onSubmit={addChannel}>
             <div>
-              <h2>Agrega tu canal de <b>KICK</b></h2>
+              <span className="kickIcon">K</span>
+              <h2>Agrega tu canal de <strong>KICK</strong></h2>
               <p>Sé parte de la Legión y muestra tu contenido a toda la comunidad.</p>
             </div>
-          </div>
-
-          <form onSubmit={addChannel} className="addChannelForm">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="https://kick.com/tu-canal"
-              rows={1}
-            />
-            <button disabled={adding}>{adding ? "Agregando..." : "Agregar canal →"}</button>
+            <div className="addRow">
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                placeholder="https://kick.com/tu-canal"
+                rows={1}
+              />
+              <button disabled={adding}>{adding ? "Añadiendo..." : "Agregar canal"}</button>
+            </div>
+            {message && <div className="msg">{message}</div>}
           </form>
 
-          {message && <div className="inlineMessage">{message}</div>}
-
-          <div className="miniStatsGrid">
-            <div><strong>{channels.length}</strong><small>Canales</small></div>
-            <div><strong>{liveCount}</strong><small>En vivo</small></div>
-            <div><strong>30s</strong><small>Refresh</small></div>
+          <div className="miniStats">
+            <div><b>{channels.length}</b><span>Canales</span></div>
+            <div><b>{liveCount}</b><span>En vivo</span></div>
+            <div><b>30s</b><span>Actualización</span></div>
           </div>
         </div>
-
-        <aside className="tournamentCard" id="eventos">
-          <span>🏆</span>
-          <h3>Torneos comunitarios</h3>
-          <p>Demuestra tu habilidad. Juega con la Legión.</p>
-          <a href={DISCORD_URL} target="_blank" rel="noreferrer">Ver comunidad →</a>
-        </aside>
       </section>
 
-      <section className="liveRail">
-        <div className="sectionBar">
-          <div><i className="pulse" /> <strong>STREAMERS EN VIVO</strong> <span>Descubre quién está transmitiendo ahora en la Legión.</span></div>
+      <section className="liveStrip" aria-label="Streamers en vivo">
+        <div className="sectionTitle compact">
+          <div>
+            <span className="liveDot" />
+            <h2>Streamers en vivo</h2>
+            <p>Descubre quién está transmitiendo ahora en la Legión.</p>
+          </div>
           <a href="#directorio">Ver todos los en vivo →</a>
         </div>
-
-        {loading ? (
-          <div className="emptyState">Cargando canales...</div>
-        ) : activeDisplay.length ? (
-          <div className="liveScroller">
-            {activeDisplay.map((channel) => (
-              <a className="liveCard" href={channel.url} target="_blank" rel="noreferrer" key={channel.slug}>
-                <div className="liveImage" style={channelImage(channel) ? { backgroundImage: `linear-gradient(#07050baa,#07050bcc), url(${channelImage(channel)})` } : undefined}>
-                  <span>EN VIVO</span>
-                  <b>👁 {shortNumber(channel.viewers)}</b>
+        <div className="liveScroller">
+          {(liveChannels.length ? liveChannels : channels.slice(0, 6)).slice(0, 6).map((channel) => {
+            const coverImage = originalCover(channel);
+            const avatarImage = originalAvatar(channel);
+            return (
+              <a key={channel.slug} className="liveCard" href={channel.url} target="_blank" rel="noreferrer">
+                <div className="liveBg" style={coverImage ? { backgroundImage: `linear-gradient(#10071db0,#10071de8), url(${coverImage})` } : undefined} />
+                <span className={channel.live ? "liveBadge on" : "liveBadge"}>{channel.live ? "EN VIVO" : "OFFLINE"}</span>
+                {avatarImage ? <img src={avatarImage} alt={channel.name || channel.slug} /> : <strong>{initials(channel.name || channel.slug)}</strong>}
+                <div>
+                  <b>{channel.name || channel.slug}</b>
+                  <small>{channel.category || "KICK"}</small>
                 </div>
-                <div className="liveInfo">
-                  {originalAvatar(channel) ? <img src={originalAvatar(channel)} alt={`Foto de ${channel.name}`} /> : <em>{initials(channel.name || channel.slug)}</em>}
-                  <div><strong>{channel.name || channel.slug}</strong><small>{channel.category || "KICK"}</small></div>
+              </a>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="spotlightGrid">
+        <article className="featuredWide">
+          <span className="cardLabel">STREAMER DESTACADO</span>
+          <div className="featuredContent">
+            <div className="featuredAvatarWrap">
+              {featuredAvatarImage ? <img src={featuredAvatarImage} alt="Canal destacado" /> : <strong>{initials(featuredChannel?.name || MAIN_CHANNEL)}</strong>}
+              <i className={featuredChannel?.live ? "on" : ""}>{featuredChannel?.live ? "EN VIVO" : "OFFLINE"}</i>
+            </div>
+            <div>
+              <h2>{featuredChannel?.name || "SoyelMoro"}</h2>
+              <p>@{featuredChannel?.slug || MAIN_CHANNEL}</p>
+              <div className="tagRow">
+                <span>{featuredChannel?.category || "KICK"}</span>
+                <span>{featuredChannel?.live ? `${featuredChannel.viewers || 0} viewers` : "Comunidad"}</span>
+              </div>
+              <div className="featuredActions">
+                <a className="greenButton" href={featuredChannel?.url || MAIN_KICK_URL} target="_blank" rel="noreferrer">Ver en Kick →</a>
+                <a className="ghostButton" href={DISCORD_URL} target="_blank" rel="noreferrer">Seguir comunidad</a>
+              </div>
+            </div>
+          </div>
+          <div className="featuredBackdrop" style={featuredCoverImage ? { backgroundImage: `linear-gradient(90deg,#0b0714 10%,#0b071499), url(${featuredCoverImage})` } : undefined} />
+        </article>
+
+        <article className="activityBox">
+          <span className="cardLabel">ACTIVIDAD RECIENTE</span>
+          <div className="activityList">
+            {recentChannels.map((channel) => (
+              <a key={channel.slug} href={channel.url} target="_blank" rel="noreferrer">
+                {originalAvatar(channel) ? <img src={originalAvatar(channel)} alt={channel.name || channel.slug} /> : <strong>{initials(channel.name || channel.slug)}</strong>}
+                <div>
+                  <b>{channel.name || channel.slug}</b>
+                  <small>{channel.live ? "está en vivo ahora" : "forma parte de la Legión"}</small>
                 </div>
               </a>
             ))}
           </div>
-        ) : (
-          <div className="emptyState">Ahora mismo no hay canales en vivo.</div>
-        )}
-      </section>
-
-      <section className="featureLayout" id="comunidad">
-        <article className="spotlightCard">
-          <div className="cardHeading">♛ STREAMER DESTACADO</div>
-          <div className="spotlightBody">
-            <div className="spotlightVisual" style={featuredImage ? { backgroundImage: `linear-gradient(90deg,#12091c 22%,#12091c66), url(${featuredImage})` } : undefined}>
-              <span>{featuredChannel?.live ? "EN VIVO" : "OFFLINE"}</span>
-              {originalAvatar(featuredChannel) ? <img src={originalAvatar(featuredChannel)} alt={`Foto de ${featuredChannel?.name || "streamer"}`} /> : <strong>{initials(featuredChannel?.name || "LS")}</strong>}
-            </div>
-            <div className="spotlightText">
-              <h2>{featuredChannel?.name || "SoyelMoro"}</h2>
-              <p>{featuredChannel ? `@${featuredChannel.slug}` : "@soyelmoro"}</p>
-              <div className="tagRow">
-                <span>{channelLabel(featuredChannel)}</span>
-                <span>Comunidad</span>
-                <span>{featuredChannel?.live ? `${featuredChannel.viewers || 0} viewers` : "Destacado"}</span>
-              </div>
-              <div className="spotlightActions">
-                <a className="kickBtn" href={featuredChannel?.url || MAIN_KICK_URL} target="_blank" rel="noreferrer">Ver en Kick →</a>
-                <a className="followBtn" href={DISCORD_URL} target="_blank" rel="noreferrer">Seguir comunidad</a>
-              </div>
-            </div>
-          </div>
         </article>
 
-        <aside className="activityCard">
-          <div className="cardHeading">⌁ ACTIVIDAD RECIENTE</div>
-          <div className="activityTabs"><span>Todos</span><span>Nuevos canales</span><span>Logros</span></div>
-          <div className="activityList">
-            {(channels.length ? channels.slice(0, 5) : [{ slug: "soyelmoro", name: "SoyelMoro", url: MAIN_KICK_URL, live: false }] as Channel[]).map((channel, index) => (
-              <div className="activityItem" key={`${channel.slug}-${index}`}>
-                {originalAvatar(channel) ? <img src={originalAvatar(channel)} alt="" /> : <em>{initials(channel.name || channel.slug)}</em>}
-                <p><strong>{channel.name || channel.slug}</strong> {channel.live ? "está en vivo ahora" : "forma parte de la Legión"}<small>Actualizado recientemente</small></p>
-              </div>
-            ))}
-          </div>
-        </aside>
-
-        <aside className="newMembersCard">
-          <span>👥</span>
-          <h3>Nuevos miembros</h3>
-          <strong>+{Math.max(channels.length, 1)}</strong>
+        <article className="membersBox">
+          <span className="cardLabel">NUEVOS MIEMBROS</span>
+          <b>+{channels.length}</b>
           <p>Canales dentro de la comunidad</p>
           <a href="#directorio">Ver toda la comunidad →</a>
-        </aside>
+        </article>
       </section>
 
       <section id="directorio" className="directoryPanel">
-        <div className="directoryHeader">
+        <header className="dirHead">
           <div>
-            <span className="sectionIcon">🎮</span>
+            <span className="gameIcon">🎮</span>
             <h2>Canales de la comunidad</h2>
-            <p>Explora los streamers de la Legión. Filtra por estado, busca tu streamer favorito y descubre nuevos canales.</p>
+            <p>Explora los streamers de la Legión. Filtra por estado y busca tu streamer favorito.</p>
           </div>
-          <div className="directoryControls">
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar streamer..." />
-            <select value={tab} onChange={(e) => setTab(e.target.value as "all" | "live" | "offline")}>
-              <option value="all">Todos</option>
-              <option value="live">En vivo</option>
-              <option value="offline">Offline</option>
-            </select>
+          <div className="dirTools">
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar streamer..." />
           </div>
-        </div>
+        </header>
 
-        <div className="categoryPills">
-          <button className={tab === "all" ? "active" : ""} onClick={() => setTab("all")}>Todos</button>
-          <button className={tab === "live" ? "active" : ""} onClick={() => setTab("live")}>En vivo</button>
-          <button className={tab === "offline" ? "active" : ""} onClick={() => setTab("offline")}>Offline</button>
-          {categories.map((category) => <span key={category}>{category}</span>)}
+        <div className="statusTabs">
+          <button className={tab === "all" ? "on" : ""} onClick={() => setTab("all")}>Todos ({channels.length})</button>
+          <button className={tab === "live" ? "on" : ""} onClick={() => setTab("live")}>En vivo ({liveCount})</button>
+          <button className={tab === "offline" ? "on" : ""} onClick={() => setTab("offline")}>Offline ({offlineCount})</button>
         </div>
 
         {loading ? (
-          <div className="emptyState">Cargando canales...</div>
-        ) : filtered.length ? (
-          <div className="communityGrid">
-            {filtered.map((channel) => (
-              <article className={channel.live ? "communityCard live" : "communityCard"} key={channel.slug}>
-                <div className="communityAvatar">
-                  {originalAvatar(channel) ? <img src={originalAvatar(channel)} alt={`Foto de ${channel.name || channel.slug}`} /> : <strong>{initials(channel.name || channel.slug)}</strong>}
-                </div>
-                <div className="communityInfo">
-                  <h3>{channel.name || channel.slug}</h3>
-                  <p>{channel.live ? "● En vivo" : "● Desconectado"}</p>
-                  <small>{channel.category || channel.title || "KICK"}</small>
-                </div>
-                <div className="communityMeta">
-                  <span>{channel.live ? "EN VIVO" : "OFFLINE"}</span>
-                  <b>👁 {shortNumber(channel.viewers)}</b>
-                </div>
-                <a href={channel.url} target="_blank" rel="noreferrer">Ver canal</a>
-              </article>
-            ))}
-          </div>
+          <div className="empty">Cargando canales...</div>
         ) : (
-          <div className="emptyState">No hay canales en esta sección.</div>
+          <>
+            <div className="channelGrid">
+              {filtered.map((channel) => {
+                const avatarImage = originalAvatar(channel);
+                return (
+                  <article key={channel.slug} className="channelCard">
+                    <div className="channelTop">
+                      {avatarImage ? <img src={avatarImage} alt={channel.name || channel.slug} /> : <strong>{initials(channel.name || channel.slug)}</strong>}
+                      <div>
+                        <h3>{channel.name || channel.slug}</h3>
+                        <p><i className={channel.live ? "status on" : "status"} /> {channel.live ? "En vivo" : "Desconectado"}</p>
+                        <small>{channel.category || "KICK"}</small>
+                      </div>
+                      <span className={channel.live ? "state live" : "state"}>{channel.live ? "EN VIVO" : "OFFLINE"}</span>
+                    </div>
+                    <div className="cardStats">👁 {channel.viewers || 0}</div>
+                    <a href={channel.url} target="_blank" rel="noreferrer">Ver canal</a>
+                  </article>
+                );
+              })}
+            </div>
+            {!filtered.length && <div className="empty">No hay canales en esta sección.</div>}
+          </>
         )}
       </section>
 
-      <section className="rankingFooter">
-        <div>
-          <h2>Ranking de la comunidad</h2>
-          <p>Una vista rápida de los canales con más movimiento dentro de la Legión.</p>
-        </div>
-        <div className="rankingList">
-          {(topChannels.length ? topChannels : channels.slice(0, 5)).map((channel, index) => (
-            <a href={channel.url} target="_blank" rel="noreferrer" key={channel.slug}>
-              <b>#{index + 1}</b>
-              <span>{channel.name || channel.slug}</span>
-              <small>{channel.live ? `${shortNumber(channel.viewers)} viewers` : channel.category || "KICK"}</small>
-            </a>
-          ))}
-        </div>
-      </section>
+      {!loading && systemNotice && <div className="floatingNotice">{systemNotice}</div>}
 
-      {!loading && systemNotice && <div className="systemToast">{systemNotice}</div>}
+      <footer>
+        LEGIÓN DE STREAMERS
+        <span>CRECE • CONECTA • APOYA</span>
+      </footer>
     </main>
   );
 }
