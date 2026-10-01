@@ -42,7 +42,7 @@ type OfficialKickChannel = AnyRecord & {
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
-const KICK_PUBLIC_HEADERS = {
+const KICK_PUBLIC_HEADERS: HeadersInit = {
   Accept: "application/json, text/plain, */*",
   "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
   "Cache-Control": "no-cache",
@@ -465,8 +465,7 @@ async function fetchOfficialBatch(slugs: string[]) {
 async function fetchPublicJson(url: string) {
   const res = await fetch(url, {
     headers: KICK_PUBLIC_HEADERS,
-    cache: "no-store",
-    next: { revalidate: 0 }
+    cache: "no-store"
   });
 
   if (!res.ok) return null;
