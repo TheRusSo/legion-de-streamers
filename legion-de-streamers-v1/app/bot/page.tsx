@@ -210,6 +210,7 @@ export default function LegionBotPage() {
           <nav className={styles.nav}>
             <a href="/">Directorio</a>
             <a href="/admin">Admin canales</a>
+            <a href="/bot/comunidad">Miembros y moderación</a>
           </nav>
         </header>
 
