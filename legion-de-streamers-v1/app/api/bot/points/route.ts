@@ -13,8 +13,8 @@ export async function POST(req: NextRequest) {
   const reason = cleanText(body.reason, 240);
   const points = body.points;
 
-  if (!UUID_PATTERN.test(member_id) || !Number.isInteger(points) ||
-      typeof points !== "number" || points < 1 || points > 50 ||
+  if (!UUID_PATTERN.test(member_id) || typeof points !== "number" ||
+      !Number.isInteger(points) || points < 1 || points > 50 ||
       reason.length < 5 || reason.length > 240) {
     return botResponse({ ok: false, error: "Miembro, 1-50 puntos y motivo (5-240 caracteres) requeridos." }, 400);
   }
