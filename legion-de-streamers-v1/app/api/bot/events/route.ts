@@ -58,7 +58,11 @@ export async function POST(req: NextRequest) {
 
   let input: EventInput;
   try {
-    input = await req.json() as EventInput;
+    const parsed: unknown = await req.json();
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return response({ ok: false, error: "El cuerpo debe ser un objeto JSON." }, 400);
+    }
+    input = parsed as EventInput;
   } catch {
     return response({ ok: false, error: "JSON inválido." }, 400);
   }
