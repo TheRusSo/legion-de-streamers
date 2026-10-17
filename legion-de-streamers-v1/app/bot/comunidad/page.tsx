@@ -26,8 +26,10 @@ type Report = {
 };
 
 function categoryName(value: string) {
-  return ({ spam: "Spam", harassment: "Acoso", rules: "Incumplimiento de reglas", other: "Otro" }
-    as Record<string, string>)[value] || value;
+  const names: Record<string, string> = {
+    spam: "Spam", harassment: "Acoso", rules: "Incumplimiento de reglas", other: "Otro"
+  };
+  return names[value] || value;
 }
 
 export default function BotCommunityPage() {
