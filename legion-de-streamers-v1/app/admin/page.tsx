@@ -7,6 +7,9 @@ type AdminChannel = {
   slug: string;
   created_at?: string;
   featured?: boolean;
+  live?: boolean | null;
+  last_seen_live_at?: string | null;
+  last_checked_at?: string | null;
 };
 
 type ApiResult = {
@@ -27,6 +30,17 @@ type ApiResult = {
 const STORAGE_KEY = "legion_admin_password";
 const PUBLIC_LOCAL_CHANNELS_KEY = "legion_streamers_local_channels";
 const PUBLIC_DELETED_CHANNELS_KEY = "legion_streamers_deleted_channels";
+
+function inactivityLabel(channel: AdminChannel) {
+  if (channel.live === true) return "EN VIVO ahora";
+  if (!channel.last_seen_live_at) return "Sin registros";
+  const elapsed = Date.now() - Date.parse(channel.last_seen_live_at);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return "Sin registros";
+  if (elapsed < 60_000) return "Hace menos de 1 min";
+  if (elapsed < 3_600_000) return `Hace ${Math.floor(elapsed / 60_000)} min`;
+  if (elapsed < 86_400_000) return `Hace ${Math.floor(elapsed / 3_600_000)} h`;
+  return `Hace ${Math.floor(elapsed / 86_400_000)} días`;
+}
 
 function formatDate(value?: string) {
   if (!value) return "—";
@@ -427,6 +441,7 @@ export default function AdminPage() {
                   <tr>
                     <th>Canal</th>
                     <th>Fecha</th>
+                    <th>Tiempo inactivo</th>
                     <th>Destacado</th>
                     <th>Editar usuario</th>
                     <th>Acciones</th>
@@ -442,6 +457,14 @@ export default function AdminPage() {
                         </a>
                       </td>
                       <td>{formatDate(channel.created_at)}</td>
+                      <td>
+                        <span className={channel.live === true ? styles.activeNow : styles.inactiveTime}>
+                          {inactivityLabel(channel)}
+                        </span>
+                        {channel.last_seen_live_at && channel.live !== true && (
+                          <small className={styles.lastLive}>Último LIVE detectado: {formatDate(channel.last_seen_live_at)}</small>
+                        )}
+                      </td>
                       <td>
                         <button
                           type="button"
