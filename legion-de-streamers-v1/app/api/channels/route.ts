@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabasePublicWriteClient, getSupabaseReadClient } from "@/lib/supabase";
+import { recordChannelActivity } from "@/lib/channel-activity";
 import {
   extractKickSlugs,
   fallbackKickChannel,
@@ -325,6 +326,9 @@ async function hydrateRows(rows: ChannelRow[]) {
     return new Map<string, NormalizedKickChannel>();
   });
 
+  // El historial se escribe solo en el servidor y no interfiere con los canales.
+  await recordChannelActivity([...kickMap.values()]);
+
   const channels = rows
     .map((row) => {
       const kick = kickMap.get(row.slug.toLowerCase());
@@ -378,8 +382,9 @@ export async function GET(req: NextRequest) {
     storageWarning = getErrorMessage(error);
   }
 
+  // El canal destacado por defecto NO es una incorporación reciente.
   const defaultFeaturedRows = !hasAdminFeatured && !deleted.has(DEFAULT_FEATURED_CHANNEL)
-    ? rowsFromSlugs([DEFAULT_FEATURED_CHANNEL], true)
+    ? [{ slug: DEFAULT_FEATURED_CHANNEL, created_at: "1970-01-01T00:00:00.000Z", featured: true }]
     : [];
 
   const finalRows = mergeRows(rows, [...defaultFeaturedRows, ...filterDeletedRows(extraRows, deleted)]);
