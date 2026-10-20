@@ -15,3 +15,4 @@ alter table public.channel_activity enable row level security;
 
 -- Solo el servidor con SUPABASE_SERVICE_ROLE_KEY puede leer o escribir el historial.
 revoke all on public.channel_activity from anon, authenticated;
+grant select, insert, update, delete on public.channel_activity to service_role;
