@@ -31,10 +31,10 @@ const STORAGE_KEY = "legion_admin_password";
 const PUBLIC_LOCAL_CHANNELS_KEY = "legion_streamers_local_channels";
 const PUBLIC_DELETED_CHANNELS_KEY = "legion_streamers_deleted_channels";
 
-function inactivityLabel(channel: AdminChannel) {
+function inactivityLabel(channel: AdminChannel, now: number) {
   if (channel.live === true) return "EN VIVO ahora";
   if (!channel.last_seen_live_at) return "Sin registros";
-  const elapsed = Date.now() - Date.parse(channel.last_seen_live_at);
+  const elapsed = now - Date.parse(channel.last_seen_live_at);
   if (!Number.isFinite(elapsed) || elapsed < 0) return "Sin registros";
   const prefix = channel.live === null ? "Último LIVE hace " : "Inactivo hace ";
   if (elapsed < 60_000) return `${prefix}menos de 1 min`;
@@ -151,6 +151,12 @@ export default function AdminPage() {
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [clockNow, setClockNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setClockNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const sortedChannels = useMemo(() => {
     return [...channels].sort((a, b) => Number(b.featured) - Number(a.featured) || a.slug.localeCompare(b.slug));
@@ -180,7 +186,10 @@ export default function AdminPage() {
 
   function syncChannels(data: ApiResult) {
     if (Array.isArray(data.channels)) {
-      setChannels(data.channels);
+      setChannels((current) => data.channels!.map((channel) => ({
+        ...current.find((old) => old.slug === channel.slug),
+        ...channel
+      })));
     }
   }
 
@@ -460,7 +469,7 @@ export default function AdminPage() {
                       <td>{formatDate(channel.created_at)}</td>
                       <td>
                         <span className={channel.live === true ? styles.activeNow : styles.inactiveTime}>
-                          {inactivityLabel(channel)}
+                          {inactivityLabel(channel, clockNow)}
                         </span>
                         {channel.last_seen_live_at && channel.live !== true && (
                           <small className={styles.lastLive}>Último LIVE detectado: {formatDate(channel.last_seen_live_at)}</small>
