@@ -153,6 +153,27 @@
   align-items:center;
 }
 
+
+.activeNow{
+  color:#4ade80;
+  font-weight:800;
+  white-space:nowrap;
+}
+
+.inactiveTime{
+  color:#d8c8ff;
+  font-weight:700;
+  white-space:nowrap;
+}
+
+.lastLive{
+  color:#a8a0b8;
+  display:block;
+  margin-top:5px;
+  font-size:11px;
+  line-height:1.5;
+}
+
 .panel{
   display:grid;
   gap:18px;
