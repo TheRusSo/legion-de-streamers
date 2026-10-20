@@ -319,7 +319,7 @@ async function insertSlugsIntoSupabase(slugs: string[]): Promise<AddResult> {
   }
 }
 
-async function hydrateRows(rows: ChannelRow[]) {
+async function hydrateRows(rows: ChannelRow[], persistentSlugs: string[] = []) {
   let kickStatus = "ok";
   const kickMap: Map<string, NormalizedKickChannel> = await fetchKickChannels(rows.map((row) => row.slug)).catch(() => {
     kickStatus = "error";
@@ -327,7 +327,8 @@ async function hydrateRows(rows: ChannelRow[]) {
   });
 
   // El historial se escribe solo en el servidor y no interfiere con los canales.
-  await recordChannelActivity([...kickMap.values()]);
+  const persisted = new Set(persistentSlugs.map((slug) => slug.toLowerCase()));
+  await recordChannelActivity([...kickMap.values()].filter((channel) => persisted.has(channel.slug.toLowerCase())));
 
   const channels = rows
     .map((row) => {
@@ -365,7 +366,8 @@ function parseExtraSlugs(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const extraRows = rowsFromSlugs(parseExtraSlugs(req));
+  // Canales guardados solo en localStorage no tienen fecha de alta global verificable.
+  const extraRows = rowsFromSlugs(parseExtraSlugs(req)).map((row) => ({ ...row, created_at: "" }));
   let rows: ChannelRow[] = [];
   let deleted = new Set<string>();
   let hasAdminFeatured = false;
@@ -388,7 +390,7 @@ export async function GET(req: NextRequest) {
     : [];
 
   const finalRows = mergeRows(rows, [...defaultFeaturedRows, ...filterDeletedRows(extraRows, deleted)]);
-  const { channels, kickStatus } = await hydrateRows(finalRows);
+  const { channels, kickStatus } = await hydrateRows(finalRows, rows.map((row) => row.slug));
 
   return NextResponse.json({
     ok: true,
