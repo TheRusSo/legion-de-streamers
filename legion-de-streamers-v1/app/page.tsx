@@ -22,6 +22,7 @@ type Channel = {
   banner?: string;
   followers?: number;
   featured?: boolean;
+  created_at?: string;
   source?: string;
 };
 
@@ -142,6 +143,17 @@ async function readApiResult(res: Response): Promise<ApiResult> {
   } catch {
     return { error: text };
   }
+}
+
+function joinedAgo(value?: string) {
+  if (!value) return "se unió a la Legión";
+  const elapsed = Date.now() - Date.parse(value);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return "se unió a la Legión";
+  if (elapsed < 60_000) return "se unió hace un momento";
+  if (elapsed < 3_600_000) return `se unió hace ${Math.floor(elapsed / 60_000)} min`;
+  if (elapsed < 86_400_000) return `se unió hace ${Math.floor(elapsed / 3_600_000)} h`;
+  if (elapsed < 2_592_000_000) return `se unió hace ${Math.floor(elapsed / 86_400_000)} días`;
+  return `se unió el ${new Date(value).toLocaleDateString("es")}`;
 }
 
 function formatList(values: string[]) {
@@ -278,8 +290,10 @@ export default function Page() {
   const featuredChannel = featuredChannels[0] || channels.find((channel) => channel.slug.toLowerCase() === MAIN_CHANNEL) || channels[0];
   const featuredCoverImage = originalCover(featuredChannel);
   const featuredAvatarImage = originalAvatar(featuredChannel);
+  // Actividad reciente = últimos miembros agregados, no ranking de vivos/destacados.
   const recentChannels = [...channels]
-    .sort((a, b) => Number(b.featured) - Number(a.featured) || Number(b.live) - Number(a.live) || (b.viewers || 0) - (a.viewers || 0) || a.name.localeCompare(b.name))
+    .filter((channel) => channel.created_at && Date.parse(channel.created_at) > 0)
+    .sort((a, b) => Date.parse(b.created_at || "") - Date.parse(a.created_at || ""))
     .slice(0, 5);
 
   const filtered = useMemo(() => {
@@ -418,7 +432,7 @@ export default function Page() {
                 {originalAvatar(channel) ? <img src={originalAvatar(channel)} alt={channel.name || channel.slug} /> : <strong>{initials(channel.name || channel.slug)}</strong>}
                 <div>
                   <b>{channel.name || channel.slug}</b>
-                  <small>{channel.live ? "está en vivo ahora" : channel.featured ? "canal destacado" : "forma parte de la Legión"}</small>
+                  <small>{joinedAgo(channel.created_at)}</small>
                 </div>
               </a>
             ))}
