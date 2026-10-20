@@ -1,0 +1,20 @@
+name: Actualizar actividad en Kick
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Consultar estado de canales y guardar última detección de LIVE
+        run: |
+          curl --fail --location --silent --show-error --retry 2 --connect-timeout 15 --max-time 180 \
+            "https://legion-de-streamers.vercel.app/api/channels" \
+            --output /dev/null
