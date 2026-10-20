@@ -36,10 +36,11 @@ function inactivityLabel(channel: AdminChannel) {
   if (!channel.last_seen_live_at) return "Sin registros";
   const elapsed = Date.now() - Date.parse(channel.last_seen_live_at);
   if (!Number.isFinite(elapsed) || elapsed < 0) return "Sin registros";
-  if (elapsed < 60_000) return "Hace menos de 1 min";
-  if (elapsed < 3_600_000) return `Hace ${Math.floor(elapsed / 60_000)} min`;
-  if (elapsed < 86_400_000) return `Hace ${Math.floor(elapsed / 3_600_000)} h`;
-  return `Hace ${Math.floor(elapsed / 86_400_000)} días`;
+  const prefix = channel.live === null ? "Último LIVE hace " : "Inactivo hace ";
+  if (elapsed < 60_000) return `${prefix}menos de 1 min`;
+  if (elapsed < 3_600_000) return `${prefix}${Math.floor(elapsed / 60_000)} min`;
+  if (elapsed < 86_400_000) return `${prefix}${Math.floor(elapsed / 3_600_000)} h`;
+  return `${prefix}${Math.floor(elapsed / 86_400_000)} días`;
 }
 
 function formatDate(value?: string) {
@@ -407,7 +408,7 @@ export default function AdminPage() {
             <span className={styles.badge}>PANEL PRIVADO</span>
             <h1 className={styles.title}>Gestionar <span>canales</span></h1>
             <p className={styles.text}>
-              Añade, edita, elimina y marca canales como destacados. Los destacados aparecen arriba en la página pública.
+              Añade, edita, elimina y marca canales como destacados. La inactividad se calcula desde el último directo detectado por la web.
             </p>
           </div>
 
