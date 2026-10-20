@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { fetchKickChannels } from "@/lib/kick";
+import { readChannelActivity, recordChannelActivity } from "@/lib/channel-activity";
 import { cleanKickSlug, extractKickSlugs } from "@/lib/kick";
 
 export const dynamic = "force-dynamic";
@@ -460,10 +462,24 @@ export async function GET(req: NextRequest) {
 
   try {
     const channels = await readAdminRows();
+    const kickMap = await fetchKickChannels(channels.map((channel) => channel.slug))
+      .catch(() => null);
+    if (kickMap) await recordChannelActivity([...kickMap.values()]);
+    const activity = await readChannelActivity(channels.map((channel) => channel.slug));
+    const withInactivity = channels.map((channel) => {
+      const last = activity.get(channel.slug.toLowerCase());
+      const kick = kickMap?.get(channel.slug.toLowerCase());
+      return {
+        ...channel,
+        live: kick && kick.source !== "fallback" ? kick.live : null,
+        last_seen_live_at: last?.last_seen_live_at || null,
+        last_checked_at: last?.last_checked_at || null
+      };
+    });
 
     return NextResponse.json({
       ok: true,
-      channels,
+      channels: withInactivity,
       total: channels.length,
       source: "supabase"
     });
