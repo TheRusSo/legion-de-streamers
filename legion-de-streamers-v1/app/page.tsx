@@ -320,6 +320,7 @@ export default function Page() {
         <div className="navCenter">
           <a href="#top" className="active">Inicio</a>
           <a href="#directorio">Canales</a>
+          <a href="/bot">Legión Bot</a>
           <a href={DISCORD_URL} target="_blank" rel="noreferrer">Comunidad</a>
         </div>
         <div className="navActions">
